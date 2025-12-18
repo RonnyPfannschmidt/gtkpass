@@ -65,15 +65,19 @@ class TestApplicationAcceptance:
         """
         from gtkpass.services.background import BackgroundService
 
-        # Check that BackgroundService implements the Service protocol
+        # Check that BackgroundService implements the context manager protocol
         service = BackgroundService()
 
-        # Should have initialize and cleanup methods
-        assert hasattr(service, "initialize")
-        assert hasattr(service, "cleanup")
-        assert callable(service.initialize)
-        assert callable(service.cleanup)
+        # Should have __enter__ and __exit__ methods
+        assert hasattr(service, "__enter__")
+        assert hasattr(service, "__exit__")
+        assert callable(service.__enter__)
+        assert callable(service.__exit__)
 
-        # Should work correctly
-        service.initialize()
-        service.cleanup()
+        # Should work as a context manager
+        with service as svc:
+            assert svc is service
+            assert service._executor is not None
+
+        # Should clean up after context
+        assert service._executor is None

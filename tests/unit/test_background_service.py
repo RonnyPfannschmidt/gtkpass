@@ -9,25 +9,28 @@ from gtkpass.services.background import BackgroundService
 class TestBackgroundService:
     """Test cases for BackgroundService."""
 
-    def test_initialization(self):
-        """Test that the service can be initialized."""
+    def test_context_manager_initialization(self):
+        """Test that the service initializes when entering context."""
         service = BackgroundService(max_workers=2)
-        service.initialize()
-        assert service._executor is not None
-        service.cleanup()
-
-    def test_cleanup(self):
-        """Test that cleanup properly shuts down the executor."""
-        service = BackgroundService()
-        service.initialize()
-        service.cleanup()
         assert service._executor is None
 
-    def test_context_manager(self):
-        """Test that the service works as a context manager."""
+        with service:
+            assert service._executor is not None
+
+        assert service._executor is None
+
+    def test_context_manager_cleanup(self):
+        """Test that cleanup properly shuts down the executor."""
         with BackgroundService() as service:
             assert service._executor is not None
+        # After exiting context, executor should be cleaned up
         assert service._executor is None
+
+    def test_context_manager_returns_self(self):
+        """Test that __enter__ returns the service instance."""
+        with BackgroundService() as service:
+            assert isinstance(service, BackgroundService)
+            assert service._executor is not None
 
     def test_submit_task(self):
         """Test submitting a task to the service."""
@@ -35,19 +38,14 @@ class TestBackgroundService:
         def sample_task(x, y):
             return x + y
 
-        service = BackgroundService()
-        service.initialize()
-
-        try:
+        with BackgroundService() as service:
             future = service.submit(sample_task, 2, 3)
             assert isinstance(future, Future)
             result = future.result(timeout=1.0)
             assert result == 5
-        finally:
-            service.cleanup()
 
-    def test_submit_without_initialization(self):
-        """Test that submitting without initialization raises an error."""
+    def test_submit_without_context(self):
+        """Test that submitting without context manager raises an error."""
         service = BackgroundService()
 
         with pytest.raises(RuntimeError, match="not initialized"):
@@ -63,3 +61,23 @@ class TestBackgroundService:
             futures = [service.submit(task, i) for i in range(5)]
             results = [f.result(timeout=1.0) for f in futures]
             assert results == [0, 2, 4, 6, 8]
+
+    def test_reusable_context_manager(self):
+        """Test that the service can be used multiple times as context manager."""
+        service = BackgroundService()
+
+        # First use
+        with service as svc1:
+            assert svc1._executor is not None
+            future = svc1.submit(lambda: "first")
+            assert future.result() == "first"
+
+        assert service._executor is None
+
+        # Second use
+        with service as svc2:
+            assert svc2._executor is not None
+            future = svc2.submit(lambda: "second")
+            assert future.result() == "second"
+
+        assert service._executor is None
