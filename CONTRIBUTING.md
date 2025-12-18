@@ -1,0 +1,274 @@
+# Contributing to GTKPass
+
+Thank you for considering contributing to GTKPass! This document provides guidelines and instructions for contributing to the project.
+
+## Code of Conduct
+
+By participating in this project, you agree to maintain a respectful and inclusive environment for all contributors. We follow the [Contributor Covenant Code of Conduct](https://www.contributor-covenant.org/).
+
+## How Can I Contribute?
+
+### Reporting Bugs
+
+Before creating bug reports, please check the existing issues to avoid duplicates. When creating a bug report, include:
+
+- **Clear title and description**
+- **Steps to reproduce** the issue
+- **Expected behavior**
+- **Actual behavior**
+- **System information** (OS, GTK version, Python version)
+- **Screenshots** if applicable
+- **Error messages or logs**
+
+Use the bug report template when available.
+
+### Suggesting Features
+
+Feature suggestions are welcome! Please:
+
+- Check existing feature requests first
+- Explain the use case and benefits
+- Consider if it fits the project goals
+- Reference relevant requirements from REQUIREMENTS.md
+
+### Code Contributions
+
+We welcome code contributions! Here's how to get started:
+
+#### 1. Set Up Development Environment
+
+```bash
+# Clone the repository
+git clone https://github.com/RonnyPfannschmidt/gtkpass.git
+cd gtkpass
+
+# Create a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install development dependencies (when available)
+pip install -e ".[dev]"
+
+# Install pre-commit hooks (when configured)
+pre-commit install
+```
+
+#### 2. Create a Branch
+
+```bash
+# Create a feature branch
+git checkout -b feature/your-feature-name
+
+# Or a bugfix branch
+git checkout -b fix/issue-number-description
+```
+
+#### 3. Make Your Changes
+
+Follow these guidelines:
+
+**Python Code Style:**
+- Follow PEP 8
+- Use type hints for all functions
+- Write docstrings for public APIs
+- Keep functions focused and small
+- Prefer composition over inheritance
+
+**GTK/UI Code:**
+- Use Blueprint (.blp) format for UI definitions
+- Follow GNOME Human Interface Guidelines
+- Support keyboard navigation
+- Ensure accessibility
+- Test with dark mode
+
+**Security:**
+- Never log or print passwords
+- Clear sensitive data from memory
+- Validate all user inputs
+- Handle GPG errors gracefully
+- Follow security best practices
+
+**Git Commits:**
+- Use conventional commits format:
+  - `feat:` for new features
+  - `fix:` for bug fixes
+  - `docs:` for documentation
+  - `refactor:` for code refactoring
+  - `test:` for adding tests
+  - `chore:` for maintenance tasks
+- Reference issue numbers (e.g., `fix: clipboard not clearing (#42)`)
+- Keep commits atomic and focused
+- Write clear commit messages
+
+#### 4. Write Tests
+
+- Add tests for new features
+- Update tests for changed functionality
+- Ensure tests pass: `pytest`
+- Aim for 80%+ code coverage
+- Include unit and integration tests
+
+#### 5. Run Quality Checks
+
+```bash
+# Run tests
+pytest
+
+# Run linter
+ruff check src/
+
+# Run type checker
+mypy src/
+
+# Format code
+ruff format src/
+```
+
+#### 6. Submit Pull Request
+
+- Push your branch to GitHub
+- Create a pull request
+- Fill out the PR template
+- Reference related issues
+- Wait for review and address feedback
+
+## Development Guidelines
+
+### Project Structure
+
+```
+gtkpass/
+├── src/gtkpass/          # Application code
+│   ├── models/           # Data models
+│   ├── services/         # Business logic
+│   ├── ui/               # UI components
+│   │   └── blueprints/   # Blueprint UI files
+│   └── utils/            # Utilities
+├── tests/                # Test suite
+├── data/                 # Resources (icons, desktop files)
+└── docs/                 # Documentation
+```
+
+### Architecture
+
+GTKPass follows a layered architecture:
+
+1. **UI Layer**: GTK4/Libadwaita widgets and Blueprint definitions
+2. **Application Layer**: Controllers and event handlers
+3. **Service Layer**: Business logic (GPG, Git, OTP, QR, Keyring)
+4. **Model Layer**: Data structures (Password, PasswordStore, OTPToken)
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed information.
+
+### Key Technologies
+
+- **Python 3.10+**: Modern Python features
+- **GTK4**: UI framework
+- **Libadwaita**: GNOME widgets
+- **Blueprint**: UI definition format
+- **python-gnupg**: GPG operations
+- **keyring**: System keyring
+- **GitPython**: Git operations
+- **pyotp**: OTP generation
+- **qrcode**: QR code generation
+
+### Documentation
+
+- Update documentation for new features
+- Add docstrings to public APIs
+- Update REQUIREMENTS.md if adding requirements
+- Update README.md if needed
+- Add examples for complex features
+
+### Testing
+
+- Write unit tests for business logic
+- Write integration tests for workflows
+- Test edge cases and error conditions
+- Mock external dependencies (GPG, filesystem, git)
+- Test with different password stores
+
+### Security
+
+Security is critical. Follow these practices:
+
+- **Never commit secrets** or test passwords
+- **Validate all inputs** from users and files
+- **Clear sensitive data** from memory
+- **Use secure random** for password generation
+- **Handle GPG errors** gracefully
+- **Test encryption/decryption** thoroughly
+- **Review security implications** of changes
+
+### UI/UX Guidelines
+
+- Follow GNOME HIG
+- Support keyboard shortcuts
+- Ensure accessibility (screen readers, high contrast)
+- Test with different screen sizes
+- Support dark mode
+- Provide visual feedback for actions
+- Use Libadwaita patterns (toast, dialogs, etc.)
+
+## Code Review Process
+
+All contributions go through code review:
+
+1. **Automated Checks**: CI runs tests, linting, type checking
+2. **Manual Review**: Maintainers review code quality and design
+3. **Testing**: Reviewers may test functionality manually
+4. **Feedback**: Address review comments and update PR
+5. **Approval**: Once approved, PR will be merged
+
+## Questions?
+
+- Check existing documentation (README, REQUIREMENTS, ARCHITECTURE)
+- Search existing issues and discussions
+- Ask in GitHub Discussions
+- Reach out to maintainers
+
+## Recognition
+
+Contributors will be:
+- Listed in CONTRIBUTORS.md
+- Mentioned in release notes
+- Credited in commit history
+
+## License
+
+By contributing to GTKPass, you agree that your contributions will be licensed under the GPL-3.0 License.
+
+## Getting Help
+
+- **Documentation**: Start with README.md and REQUIREMENTS.md
+- **Development**: See ARCHITECTURE.md and CLAUDE.md
+- **Issues**: Browse existing issues
+- **Discussions**: Ask questions in GitHub Discussions
+- **Contact**: Reach out to maintainers
+
+## Development Resources
+
+### GNOME Resources
+- [GNOME Developer Center](https://developer.gnome.org/)
+- [GTK4 Documentation](https://docs.gtk.org/gtk4/)
+- [Libadwaita Documentation](https://gnome.pages.gitlab.gnome.org/libadwaita/)
+- [Blueprint Documentation](https://jwestman.pages.gitlab.gnome.org/blueprint-compiler/)
+- [GNOME HIG](https://developer.gnome.org/hig/)
+
+### passwordstore Resources
+- [passwordstore](https://www.passwordstore.org/)
+- [pass man page](https://git.zx2c4.com/password-store/about/)
+- [pass-otp](https://github.com/tadfisher/pass-otp)
+
+### Python Resources
+- [Python Type Hints](https://docs.python.org/3/library/typing.html)
+- [PEP 8 Style Guide](https://pep8.org/)
+- [pytest Documentation](https://docs.pytest.org/)
+
+## Maintainers
+
+- Ronny Pfannschmidt ([@RonnyPfannschmidt](https://github.com/RonnyPfannschmidt))
+
+## Thank You!
+
+Your contributions make GTKPass better for everyone. We appreciate your time and effort! 🎉
