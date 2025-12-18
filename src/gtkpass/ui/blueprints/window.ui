@@ -6,6 +6,12 @@
   <menu id="primary_menu">
     <section>
       <item>
+        <attribute name="label" translatable="yes">Preferences</attribute>
+        <attribute name="action">app.preferences</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
         <attribute name="label" translatable="yes">About GTKPass</attribute>
         <attribute name="action">app.about</attribute>
       </item>
@@ -18,12 +24,19 @@
   
   <template class="GTKPassWindow" parent="AdwApplicationWindow">
     <property name="title">GTKPass</property>
-    <property name="default-width">800</property>
-    <property name="default-height">600</property>
+    <property name="default-width">1000</property>
+    <property name="default-height">700</property>
     <property name="content">
       <object class="AdwToolbarView">
         <child type="top">
           <object class="AdwHeaderBar" id="header_bar">
+            <child type="start">
+              <object class="GtkButton" id="add_button">
+                <property name="icon-name">list-add-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Add Password</property>
+                <property name="action-name">win.add-password</property>
+              </object>
+            </child>
             <child type="end">
               <object class="GtkMenuButton">
                 <property name="icon-name">open-menu-symbolic</property>
@@ -33,10 +46,51 @@
           </object>
         </child>
         <property name="content">
-          <object class="AdwStatusPage">
-            <property name="title" translatable="yes">Welcome to GTKPass</property>
-            <property name="description" translatable="yes">A modern password manager for GNOME</property>
-            <property name="icon-name">io.github.ronnypfannschmidt.GTKPass</property>
+          <object class="AdwOverlaySplitView" id="split_view">
+            <property name="sidebar-position">start</property>
+            <property name="show-sidebar">True</property>
+            <property name="min-sidebar-width">250</property>
+            <property name="max-sidebar-width">400</property>
+            <property name="sidebar">
+              <object class="GtkBox">
+                <property name="orientation">vertical</property>
+                <child>
+                  <object class="GtkSearchEntry" id="search_entry">
+                    <property name="placeholder-text" translatable="yes">Search passwords...</property>
+                    <property name="margin-top">6</property>
+                    <property name="margin-bottom">6</property>
+                    <property name="margin-start">6</property>
+                    <property name="margin-end">6</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkScrolledWindow">
+                    <property name="vexpand">True</property>
+                    <property name="child">
+                      <object class="GtkListBox" id="password_list">
+                        <property name="selection-mode">single</property>
+                        <style>
+                          <class name="navigation-sidebar"/>
+                        </style>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+              </object>
+            </property>
+            <property name="content">
+              <object class="GtkBox">
+                <property name="orientation">vertical</property>
+                <child>
+                  <object class="AdwStatusPage" id="placeholder_page">
+                    <property name="title" translatable="yes">No Password Selected</property>
+                    <property name="description" translatable="yes">Select a password from the list to view details</property>
+                    <property name="icon-name">dialog-password-symbolic</property>
+                    <property name="vexpand">True</property>
+                  </object>
+                </child>
+              </object>
+            </property>
           </object>
         </property>
       </object>
