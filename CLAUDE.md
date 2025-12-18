@@ -310,7 +310,8 @@ class PasswordEditor(Adw.Dialog):
 ### Service Layer
 
 ```python
-from typing import Protocol
+from pathlib import Path
+from typing import Optional, Protocol
 import gnupg
 
 class GPGService(Protocol):
