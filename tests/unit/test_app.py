@@ -7,18 +7,14 @@ import pytest
 class TestGTKPassApp:
     """Test cases for the GTKPass application."""
 
-    def test_app_module_exists(self):
-        """Test that the app module exists."""
-        # Test without importing GTK which may not be available
-        import importlib.util
+    @pytest.mark.skipif(
+        not pytest.importorskip("gi.repository.Gtk", minversion="4.0"),
+        reason="GTK4 not available",
+    )
+    def test_app_initialization(self):
+        """Test that the GTKPass application can be initialized."""
+        from gtkpass.app import GTKPassApp
 
-        spec = importlib.util.find_spec("gtkpass.app")
-        assert spec is not None
-
-    def test_app_has_main_function(self):
-        """Test that the app module has a main function."""
-        # We can import without instantiating
-        pytest.importorskip("gi.repository.Gtk", minversion="4.0")
-        from gtkpass.app import main
-
-        assert callable(main)
+        app = GTKPassApp()
+        assert app is not None
+        assert app.window is None  # Window not created until activated
