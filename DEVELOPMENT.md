@@ -59,6 +59,13 @@ pip install pre-commit
 pre-commit install
 ```
 
+5. Compile Blueprint UI files (optional - pre-compiled UI files are included):
+```bash
+./compile_blueprints.sh
+```
+
+Note: Blueprint compiler is not required for development as pre-compiled `.ui` files are included in the repository. However, if you modify `.blp` files, you'll need to recompile them.
+
 ## Running the Application
 
 ```bash

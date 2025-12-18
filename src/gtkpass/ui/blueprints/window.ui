@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.0"/>
+  
+  <menu id="primary_menu">
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">About GTKPass</attribute>
+        <attribute name="action">app.about</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Quit</attribute>
+        <attribute name="action">app.quit</attribute>
+      </item>
+    </section>
+  </menu>
+  
+  <template class="GTKPassWindow" parent="AdwApplicationWindow">
+    <property name="title">GTKPass</property>
+    <property name="default-width">800</property>
+    <property name="default-height">600</property>
+    <property name="content">
+      <object class="AdwToolbarView">
+        <child type="top">
+          <object class="AdwHeaderBar" id="header_bar">
+            <child type="end">
+              <object class="GtkMenuButton">
+                <property name="icon-name">open-menu-symbolic</property>
+                <property name="menu-model">primary_menu</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <property name="content">
+          <object class="AdwStatusPage">
+            <property name="title" translatable="yes">Welcome to GTKPass</property>
+            <property name="description" translatable="yes">A modern password manager for GNOME</property>
+            <property name="icon-name">io.github.ronnypfannschmidt.GTKPass</property>
+          </object>
+        </property>
+      </object>
+    </property>
+  </template>
+</interface>
