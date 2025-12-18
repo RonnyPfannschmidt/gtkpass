@@ -1,0 +1,85 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $GTKPassWindow : Adw.ApplicationWindow {
+  title: "GTKPass";
+  default-width: 1000;
+  default-height: 700;
+
+  Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar header_bar {
+      [start]
+      Button add_button {
+        icon-name: "list-add-symbolic";
+        tooltip-text: _("Add Password");
+        action-name: "win.add-password";
+      }
+
+      [end]
+      MenuButton {
+        icon-name: "open-menu-symbolic";
+        menu-model: primary_menu;
+      }
+    }
+
+    content: Adw.OverlaySplitView split_view {
+      sidebar-position: start;
+      show-sidebar: true;
+      min-sidebar-width: 250;
+      max-sidebar-width: 400;
+
+      sidebar: Box {
+        orientation: vertical;
+
+        SearchEntry search_entry {
+          placeholder-text: _("Search passwords...");
+          margin-top: 6;
+          margin-bottom: 6;
+          margin-start: 6;
+          margin-end: 6;
+        }
+
+        ScrolledWindow {
+          vexpand: true;
+          
+          ListBox password_list {
+            selection-mode: single;
+            
+            styles ["navigation-sidebar"]
+          }
+        }
+      };
+
+      content: Box {
+        orientation: vertical;
+        
+        Adw.StatusPage placeholder_page {
+          title: _("No Password Selected");
+          description: _("Select a password from the list to view details");
+          icon-name: "dialog-password-symbolic";
+          vexpand: true;
+        }
+      };
+    };
+  }
+}
+
+menu primary_menu {
+  section {
+    item {
+      label: _("Preferences");
+      action: "app.preferences";
+    }
+  }
+  section {
+    item {
+      label: _("About GTKPass");
+      action: "app.about";
+    }
+    item {
+      label: _("Quit");
+      action: "app.quit";
+    }
+  }
+}
