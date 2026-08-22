@@ -29,7 +29,8 @@ STAGING = Path(os.environ["GTKPASS_STAGING"])
 ICON = REPO_ROOT / "data" / "icons" / "io.github.RonnyPfannschmidt.GTKPass.ico"
 
 datas = [
-    # The .ui templates and demo.json, loaded through importlib.resources.
+    # The .ui templates, demo.json and the passphrase wordlist, all loaded
+    # through importlib.resources.
     *collect_data_files("gtkpass"),
     # Entry points, and what safety.require_installed() reads.
     *copy_metadata("gtk-pass-ng"),

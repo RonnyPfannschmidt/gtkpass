@@ -73,6 +73,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "gtkpass.ui.blueprints" = ["*.ui", "*.blp"]
 "gtkpass.backends.data" = ["*.json"]
+"gtkpass.utils.data" = ["*.txt"]
 
 [tool.ruff]
 line-length = 88
