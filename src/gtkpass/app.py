@@ -130,6 +130,9 @@ class GTKPassApp(Adw.Application):
         "app.preferences": ["<Control>comma"],
         "win.add-password": ["<Control>n"],
         "win.edit-password": ["<Control>e"],
+        # F2 is the rename key everywhere a file manager has one, and it is
+        # not a letter, so nothing being typed into wants it.
+        "win.rename-password": ["F2"],
         "win.delete-password": ["Delete"],
         "win.copy-password": ["<Control><Shift>c"],
         "win.copy-username": ["<Control><Shift>u"],

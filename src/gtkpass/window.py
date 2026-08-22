@@ -37,6 +37,7 @@ from gtkpass.ui.password_detail import (  # noqa: F401
 )
 from gtkpass.ui.password_edit import PasswordEditDialog
 from gtkpass.ui.password_list import PasswordTreeView  # noqa: F401
+from gtkpass.ui.password_rename import PasswordRenameDialog
 from gtkpass.utils.async_ui import on_ui_thread
 from gtkpass.utils.clipboard import ClipboardCopier
 
@@ -226,6 +227,14 @@ class GTKPassWindow(Adw.ApplicationWindow):
         delete_action.connect("activate", self._on_delete_password)
         delete_action.set_enabled(False)
         self.add_action(delete_action)
+
+        # Renaming, which is also moving: an entry's name is its path. Open for
+        # exactly as long as deleting is, and for the same two reasons -- there
+        # has to be an entry, and its store has to take the write.
+        rename_action = Gio.SimpleAction.new("rename-password", None)
+        rename_action.connect("activate", self._on_rename_password)
+        rename_action.set_enabled(False)
+        self.add_action(rename_action)
 
         # Nothing is syncable until the backends have loaded and reported what
         # their stores are, so this starts closed and _refresh_sync_action
@@ -592,12 +601,13 @@ class GTKPassWindow(Adw.ApplicationWindow):
         if action is not None:
             action.set_enabled(bool(writable))
 
-        # Deleting needs an entry as well as a store that will take the change.
-        delete_action = self.lookup_action("delete-password")
-        if delete_action is not None:
-            delete_action.set_enabled(
-                self._shown is not None and self._shown[0] in writable
-            )
+        # Deleting and renaming both need an entry as well as a store that will
+        # take the change.
+        writable_entry = self._shown is not None and self._shown[0] in writable
+        for name in ("delete-password", "rename-password"):
+            action = self.lookup_action(name)
+            if action is not None:
+                action.set_enabled(writable_entry)
 
         if writable:
             self.add_button.set_tooltip_text("Add Password")
@@ -1297,6 +1307,66 @@ class GTKPassWindow(Adw.ApplicationWindow):
         )
         dialog.present(self)
         return dialog
+
+    def _on_rename_password(self, action, param):
+        """Handle the rename action."""
+        self._open_rename_dialog()
+
+    def _open_rename_dialog(self) -> PasswordRenameDialog | None:
+        """Ask where the entry on display is to move to.
+
+        Returns the dialog, as the other three do, so a test can drive it to a
+        response rather than only prove it was built.
+
+        Returns:
+            The dialog, or None when nothing is on display.
+        """
+        if self._shown is None:
+            return None
+        backend_id, password_name = self._shown
+
+        dialog = PasswordRenameDialog()
+        dialog.offer(
+            current_name=password_name,
+            # What the sidebar holds rather than a fresh listing: a clash is
+            # reported as the name is typed, and going to the store for every
+            # keystroke would be a decrypt-free but still blocking round trip.
+            taken=self.password_list.entry_names().get(backend_id, set()),
+            store_name=self._get_backend_display_name(backend_id),
+        )
+        dialog.connect(
+            "renamed",
+            lambda _dialog, new_name: self._move_entry(
+                backend_id, password_name, new_name
+            ),
+        )
+        dialog.present(self)
+        return dialog
+
+    def _move_entry(self, backend_id: str, old_name: str, new_name: str) -> None:
+        """Move an entry, off the UI thread as every other write is."""
+
+        def moved(_result):
+            self._toast(f"Renamed {old_name} to {new_name}")
+            # Re-list rather than relabelling the row: a move empties the
+            # folder it left and makes the one it went to, and the store is
+            # what decides both.
+            self._load_passwords()
+            # The entry is still the one on display, under the name it now has.
+            self._on_password_selected(backend_id, new_name)
+
+        def report(error):
+            logger.error(f"Could not move an entry in {backend_id}: {error}")
+            self._toast(f"Could not rename {old_name}: {error}")
+
+        try:
+            future = self.backend_manager.move_password_async(
+                backend_id, old_name, new_name
+            )
+        except ValueError as e:
+            report(e)
+            return
+        on_ui_thread(future, moved, report)
 
     def _on_delete_password(self, action, param):
         """Handle the delete action."""

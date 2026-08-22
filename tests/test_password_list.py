@@ -538,6 +538,7 @@ class TestTheContextMenu:
             "win.copy-password",
             "win.copy-username",
             "win.edit-password",
+            "win.rename-password",
             "win.delete-password",
         ]
 

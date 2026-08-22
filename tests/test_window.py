@@ -1672,6 +1672,226 @@ class TestDeleting:
         assert toasts and "read-only after all" in toasts[0]
 
 
+class TestRenamingAnEntry:
+    """Renaming and moving are one operation, and it is not a delete.
+
+    The backends have had ``move_password`` all along -- `pass mv`, which
+    re-encrypts across a .gpg-id boundary -- and nothing in the interface
+    reached it, so the only way to move an entry was to add it again somewhere
+    else and delete the original, which is two writes and a window in which the
+    secret exists twice.
+    """
+
+    def renamable_window(self, app):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+        return window
+
+    def open_entry(self, window):
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        name = backend.list_passwords()[0].name
+        window._on_password_selected(DEMO_BACKEND_ID, name)
+        pump_until(
+            lambda: window.password_detail.stack.get_visible_child_name() == "content"
+        )
+        return name
+
+    @staticmethod
+    def rename_in_place(backend, old_name: str, new_name: str) -> None:
+        """Move an entry inside the demo backend, which cannot do it itself.
+
+        Through ``wrapped``: what the manager hands out is a SerializedBackend,
+        and the demo data belongs to the backend it stands for.
+        """
+        demo = backend.wrapped
+        for item in demo._data:
+            if item["name"] == old_name:
+                item["name"] = new_name
+        demo._entries_cache[new_name] = demo._entries_cache.pop(old_name)
+        demo._entries_cache[new_name].name = new_name
+
+    def test_nothing_is_offered_before_an_entry_is_open(self, demo_backend_configured):
+        def enabled(app):
+            return self.renamable_window(app).lookup_action("rename-password")
+
+        assert run_in_application(enabled).get_enabled() is False
+
+    def test_an_open_entry_can_be_renamed(self, demo_backend_configured):
+        def enabled(app):
+            window = self.renamable_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is True
+
+    def test_a_read_only_store_offers_nothing(self, demo_backend_configured):
+        """The demo store raises on every write; do not offer a dialog for it."""
+
+        def enabled(app):
+            window = listed_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is False
+
+    def test_the_dialog_starts_at_the_name_it_has(self, demo_backend_configured):
+        def ask(app):
+            window = self.renamable_window(app)
+            name = self.open_entry(window)
+            dialog = window._open_rename_dialog()
+            return name, dialog.name_row.get_text()
+
+        name, offered = run_in_application(ask)
+
+        assert offered == name
+
+    def test_the_store_the_entry_stays_in_is_named(self, demo_backend_configured):
+        def ask(app):
+            window = self.renamable_window(app)
+            self.open_entry(window)
+            return window._open_rename_dialog().store_row.get_subtitle()
+
+        assert run_in_application(ask)
+
+    def test_the_names_already_there_are_offered_as_clashes(
+        self, demo_backend_configured
+    ):
+        """Otherwise the clash is a FileExistsError after the round trip."""
+
+        def ask(app):
+            window = self.renamable_window(app)
+            self.open_entry(window)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            other = backend.list_passwords()[1].name
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text(other)
+            return dialog.name_row.has_css_class("error")
+
+        assert run_in_application(ask) is True
+
+    def test_renaming_asks_the_backend_to_move_it(self, demo_backend_configured):
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: moved.append(
+                (old, new)
+            )
+            name = self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/2019/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(moved), timeout_seconds=5.0)
+            return name
+
+        name = run_in_application(ask)
+
+        assert moved == [(name, "archive/2019/moved")]
+
+    def test_the_pane_follows_the_entry_to_its_new_name(self, demo_backend_configured):
+        """What was on display still exists; it is just called something else.
+
+        The stub really moves the entry in the demo backend's data rather than
+        doing nothing: what is under test is that the pane goes looking for it
+        under the new name, and a pane left pointing at an entry that was never
+        there would pass a test whose stub was a no-op.
+        """
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: self.rename_in_place(
+                backend, old, new
+            )
+            self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(
+                lambda: window._shown == (DEMO_BACKEND_ID, "archive/moved"),
+                timeout_seconds=5.0,
+            )
+            return window._shown
+
+        assert run_in_application(ask) == (DEMO_BACKEND_ID, "archive/moved")
+
+    def test_cancelling_moves_nothing(self, demo_backend_configured):
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: moved.append(new)
+            self.open_entry(window)
+
+            window._open_rename_dialog().cancel_button.emit("clicked")
+            pump_until(lambda: False, timeout_seconds=0.2)
+
+        run_in_application(ask)
+
+        assert moved == []
+
+    def test_a_failed_move_is_reported(self, demo_backend_configured):
+        from gtkpass.backends import BackendError
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+
+            def refuse(old, new, commit=True):
+                raise BackendError("the recipients changed under it")
+
+            backend.move_password = refuse
+            toasts: list[str] = []
+            window._toast = toasts.append
+            self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(toasts), timeout_seconds=5.0)
+            return toasts
+
+        toasts = run_in_application(ask)
+
+        assert toasts and "recipients changed under it" in toasts[0]
+
+    def test_the_sidebar_is_listed_again_after_a_move(self, demo_backend_configured):
+        """A move empties the folder it left and makes the one it went to.
+
+        Inserting a row here would leave both wrong, so the store is asked
+        again -- the same thing an add and a delete do.
+        """
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: None
+            listed: list[int] = []
+            original_load = window._load_passwords
+
+            def counted(*args, **kwargs):
+                listed.append(1)
+                return original_load(*args, **kwargs)
+
+            window._load_passwords = counted
+            self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(listed), timeout_seconds=5.0)
+            return listed
+
+        assert run_in_application(ask)
+
+
 class TestACopiedSecretIsTakenBack:
     """A copy is kept for as long as there is a reason to keep it.
 

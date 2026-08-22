@@ -29,6 +29,12 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes" context="shortcut window">Rename or Move Password</property>
+                <property name="accelerator">F2</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
                 <property name="title" translatable="yes" context="shortcut window">Delete Password</property>
                 <property name="accelerator">Delete</property>
               </object>

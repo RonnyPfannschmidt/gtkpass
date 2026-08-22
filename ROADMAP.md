@@ -31,6 +31,10 @@ application; none of its dates survived contact with the work.
 - Copy to clipboard, cleared again after a timeout
 - Adding an entry, with a generated password: `secrets`, no dependency, and no
   characters that cost a retype when read off one screen and typed into another
+- Renaming and moving, which are one operation: an entry's name is its path,
+  so `pass mv` is what both go through, and the sidebar is listed again rather
+  than relabelled -- a move empties the folder it left and makes the one it
+  went to
 - Editing an entry and writing it back through its backend
 - Deleting an entry, after a question that names it and the store it leaves
 - A context menu on the sidebar rows, reached by right-click or press-and-hold
@@ -84,9 +88,6 @@ application; none of its dates survived contact with the work.
 
 Roughly in the order that would make the application usable day to day.
 
-- **Renaming and moving**, on top of `move_password`. Deleting leaves an emptied
-  folder in the sidebar until the next listing, which is the same problem seen
-  from the other end.
 - **`pass-otp`.** Reading an entry's `otpauth://` line and showing a code with
   its countdown, in the format `pass-otp` already writes, so a store stays
   usable from both. Generating the code is RFC 6238 over `hmac` — the work is in

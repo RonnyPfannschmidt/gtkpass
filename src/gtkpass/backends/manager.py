@@ -255,6 +255,36 @@ class BackendManager:
 
         return self._executor.submit(backend.delete_password, name)
 
+    def move_password_async(
+        self,
+        backend_id: str,
+        old_name: str,
+        new_name: str,
+    ) -> concurrent.futures.Future:
+        """Rename or move a password asynchronously.
+
+        One operation for both, because an entry's name is its path. It is a
+        write like any other -- `pass mv` re-encrypts when the destination has
+        different recipients, and then commits -- so it goes through the pool
+        and takes the backend's lock rather than running on the UI thread.
+
+        Args:
+            backend_id: Backend identifier
+            old_name: The entry's name today
+            new_name: The name it is to have
+
+        Returns:
+            Future that completes when the move has landed
+
+        Raises:
+            ValueError: If backend not initialized
+        """
+        backend = self._backends.get(backend_id)
+        if not backend:
+            raise ValueError(f"Backend '{backend_id}' not initialized")
+
+        return self._executor.submit(backend.move_password, old_name, new_name)
+
     def writable_backends(self) -> list[str]:
         """Backends that can be written to, in the order they were added.
 
