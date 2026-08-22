@@ -133,3 +133,65 @@ class TestSaving:
         dialog.save_button.emit("clicked")
 
         assert seen == []
+
+
+class TestGeneratingAReplacement:
+    """The generator was in the add dialog only, which is the wrong half.
+
+    Adding an entry is the one time a password is *not* being replaced. Every
+    rotation goes through here, and it went through here with nothing but an
+    empty field to type into -- so the strongest thing the application can make
+    was unavailable at exactly the moment it was wanted.
+    """
+
+    def test_the_generator_is_offered(self, dialog):
+        dialog.load(entry(f"{SECRET}\n"))
+
+        assert dialog.generator.get_visible()
+
+    def test_generating_replaces_the_password(self, dialog):
+        dialog.load(entry(f"{SECRET}\nusername: alice\n"))
+
+        dialog.generator.generate_button.emit("clicked")
+
+        assert dialog.password_row.get_text() != SECRET
+        assert dialog.password_row.get_text()
+
+    def test_generating_leaves_everything_below_it_alone(self, dialog):
+        """The whole point of rotating rather than deleting and re-adding."""
+        dialog.load(entry(f"{SECRET}\nusername: alice\nurl: example.invalid\n"))
+
+        dialog.generator.generate_button.emit("clicked")
+
+        assert details(dialog) == "username: alice\nurl: example.invalid\n"
+
+    def test_the_scheme_on_offer_is_the_one_used(self, dialog):
+        from gtkpass.utils.generate import Scheme
+
+        dialog.load(entry(f"{SECRET}\n"))
+        dialog.generator.scheme_row.set_selected(
+            dialog.generator.SCHEMES.index(Scheme.DIGITS)
+        )
+
+        dialog.generator.generate_button.emit("clicked")
+
+        assert dialog.password_row.get_text().isdigit()
+
+    def test_a_generated_password_is_shown_rather_than_dotted_out(self, dialog):
+        """Somebody who has just generated one has not seen it yet."""
+        dialog.load(entry(f"{SECRET}\n"))
+
+        dialog.generator.generate_button.emit("clicked")
+
+        assert dialog.password_row.get_delegate().get_visibility() is True
+
+    def test_it_is_the_generated_value_that_gets_saved(self, dialog):
+        dialog.load(entry(f"{SECRET}\nusername: alice\n"))
+        seen: list[str] = []
+        dialog.connect("saved", lambda _dialog, content: seen.append(content))
+
+        dialog.generator.generate_button.emit("clicked")
+        generated = dialog.password_row.get_text()
+        dialog.save_button.emit("clicked")
+
+        assert seen == [f"{generated}\nusername: alice\n"]

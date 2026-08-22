@@ -14,6 +14,7 @@ from typing import ClassVar
 
 from gtkpass._gi import Adw, GObject, Gtk
 from gtkpass.backends import PasswordEntry
+from gtkpass.ui.password_generator import PasswordGeneratorGroup
 
 
 @Gtk.Template(
@@ -37,6 +38,7 @@ class PasswordEditDialog(Adw.Dialog):
 
     name_row: Adw.ActionRow = Gtk.Template.Child()
     password_row: Adw.PasswordEntryRow = Gtk.Template.Child()
+    generator: PasswordGeneratorGroup = Gtk.Template.Child()
     details_view: Gtk.TextView = Gtk.Template.Child()
     cancel_button: Gtk.Button = Gtk.Template.Child()
     save_button: Gtk.Button = Gtk.Template.Child()
@@ -59,6 +61,21 @@ class PasswordEditDialog(Adw.Dialog):
         buffer = self.details_view.get_buffer()
         details = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
         return f"{self.password_row.get_text()}\n{details}"
+
+    @Gtk.Template.Callback()
+    def _on_generated(self, _group, password: str) -> None:
+        """Replace the password and nothing else.
+
+        Everything below it is left exactly as it was, which is the whole
+        reason to rotate an entry rather than delete it and add it again.
+
+        Revealed for the same reason the add dialog reveals it: somebody who
+        has just generated a password has not seen it yet.
+        """
+        self.password_row.set_text(password)
+        delegate = self.password_row.get_delegate()
+        if delegate is not None:
+            delegate.set_visibility(True)
 
     @Gtk.Template.Callback()
     def _on_save(self, _button) -> None:

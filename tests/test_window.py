@@ -1520,8 +1520,8 @@ class TestAdding:
         def generate(app):
             window = self.writable_window(app)
             dialog = window._open_add_dialog()
-            dialog.length_row.set_value(24)
-            dialog.generate_button.emit("clicked")
+            dialog.generator.size_row.set_value(24)
+            dialog.generator.generate_button.emit("clicked")
             return dialog.password_row.get_text()
 
         generated = run_in_application(generate)
@@ -1536,7 +1536,7 @@ class TestAdding:
         def generate(app):
             window = self.writable_window(app)
             dialog = window._open_add_dialog()
-            dialog.generate_button.emit("clicked")
+            dialog.generator.generate_button.emit("clicked")
             return dialog.password_row.get_delegate().get_visibility()
 
         assert run_in_application(generate) is True

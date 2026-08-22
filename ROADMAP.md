@@ -31,6 +31,9 @@ application; none of its dates survived contact with the work.
 - Copy to clipboard, cleared again after a timeout
 - Adding an entry, with a generated password: `secrets`, no dependency, and no
   characters that cost a retype when read off one screen and typed into another
+- Three generation schemes -- random characters, a diceware passphrase off the
+  EFF list, and digits -- offered wherever a password is set, with the entropy
+  of each shown so that twenty characters and six words can be compared
 - Renaming and moving, which are one operation: an entry's name is its path,
   so `pass mv` is what both go through, and the sidebar is listed again rather
   than relabelled -- a move empties the folder it left and makes the one it

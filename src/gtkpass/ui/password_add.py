@@ -13,7 +13,7 @@ import importlib.resources
 from typing import ClassVar
 
 from gtkpass._gi import Adw, GObject, Gtk
-from gtkpass.utils.generate import generate_password
+from gtkpass.ui.password_generator import PasswordGeneratorGroup
 
 
 @Gtk.Template(
@@ -32,9 +32,7 @@ class PasswordAddDialog(Adw.Dialog):
     backend_row: Adw.ComboRow = Gtk.Template.Child()
     name_row: Adw.EntryRow = Gtk.Template.Child()
     password_row: Adw.PasswordEntryRow = Gtk.Template.Child()
-    generate_button: Gtk.Button = Gtk.Template.Child()
-    length_row: Adw.SpinRow = Gtk.Template.Child()
-    symbols_row: Adw.SwitchRow = Gtk.Template.Child()
+    generator: PasswordGeneratorGroup = Gtk.Template.Child()
     details_view: Gtk.TextView = Gtk.Template.Child()
     cancel_button: Gtk.Button = Gtk.Template.Child()
     save_button: Gtk.Button = Gtk.Template.Child()
@@ -104,19 +102,14 @@ class PasswordAddDialog(Adw.Dialog):
         return f"{self.password_row.get_text()}\n{details}"
 
     @Gtk.Template.Callback()
-    def _on_generate(self, _button) -> None:
-        """Fill the password in, and show it.
+    def _on_generated(self, _group, password: str) -> None:
+        """Take what the generator made, and show it.
 
         Revealed on purpose: somebody who has just generated a password has not
         seen it yet, and a row of dots gives them no reason to believe anything
         happened.
         """
-        self.password_row.set_text(
-            generate_password(
-                length=int(self.length_row.get_value()),
-                symbols=self.symbols_row.get_active(),
-            )
-        )
+        self.password_row.set_text(password)
         delegate = self.password_row.get_delegate()
         if delegate is not None:
             delegate.set_visibility(True)
