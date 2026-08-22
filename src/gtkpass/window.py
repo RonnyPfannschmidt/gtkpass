@@ -590,6 +590,12 @@ class GTKPassWindow(Adw.ApplicationWindow):
         """Set up the password list."""
         # Connect selection handler
         self.password_list.connect_password_selected(self._on_password_selected)
+        # Every selection, not only the ones that are entries: standing on a
+        # folder changes which actions have a target, and nothing else would
+        # say so.
+        self.password_list.connect(
+            "selection-changed", lambda *_: self._refresh_write_actions()
+        )
         self.password_detail.connect("copy-requested", self._on_copy_requested)
 
         # Not a Gio.Settings.bind: Adw.PasswordEntryRow has no property to bind
@@ -611,13 +617,36 @@ class GTKPassWindow(Adw.ApplicationWindow):
         if action is not None:
             action.set_enabled(bool(writable))
 
-        # Deleting and renaming both need an entry as well as a store that will
-        # take the change.
-        writable_entry = self._shown is not None and self._shown[0] in writable
-        for name in ("delete-password", "rename-password", "rotate-password"):
+        # A selected folder is what the entry actions are measured against
+        # rather than the pane. Right-clicking a folder selects it and opens
+        # the menu over it, and the pane goes on showing whatever it was
+        # showing -- so a menu that renamed the folder while its Delete removed
+        # an entry that is not even on screen would be a trap.
+        folder = self.password_list.get_selected_folder()
+
+        # Deleting, renaming and rotating all need an entry as well as a store
+        # that will take the change.
+        writable_entry = (
+            folder is None and self._shown is not None and self._shown[0] in writable
+        )
+        for name in ("delete-password", "rotate-password"):
             action = self.lookup_action(name)
             if action is not None:
                 action.set_enabled(writable_entry)
+
+        # Editing needs no writable check of its own -- _set_shown owns it --
+        # but it acts on the pane, so a folder takes it away too.
+        edit_action = self.lookup_action("edit-password")
+        if edit_action is not None and folder is not None:
+            edit_action.set_enabled(False)
+
+        # Renaming is the one that also applies to a folder, which is a row the
+        # sidebar has and the pane never shows.
+        rename_action = self.lookup_action("rename-password")
+        if rename_action is not None:
+            rename_action.set_enabled(
+                folder[0] in writable if folder is not None else writable_entry
+            )
 
         if writable:
             self.add_button.set_tooltip_text("Add Password")
@@ -1363,18 +1392,29 @@ class GTKPassWindow(Adw.ApplicationWindow):
         self._open_rename_dialog()
 
     def _open_rename_dialog(self) -> PasswordRenameDialog | None:
-        """Ask where the entry on display is to move to.
+        """Ask where the entry or the folder is to move to.
+
+        A selected folder wins over an entry on display. Right-clicking a row
+        selects it before the menu opens, so the sidebar is the more recent
+        statement of what somebody meant -- and the pane goes on showing
+        whatever it was showing while the tree is being walked.
 
         Returns the dialog, as the other three do, so a test can drive it to a
         response rather than only prove it was built.
 
         Returns:
-            The dialog, or None when nothing is on display.
+            The dialog, or None when there is nothing selected to move.
         """
+        folder = self.password_list.get_selected_folder()
+        if folder is not None:
+            return self._rename_folder_dialog(*folder)
         if self._shown is None:
             return None
-        backend_id, password_name = self._shown
+        return self._rename_entry_dialog(*self._shown)
 
+    def _rename_entry_dialog(
+        self, backend_id: str, password_name: str
+    ) -> PasswordRenameDialog:
         dialog = PasswordRenameDialog()
         dialog.offer(
             current_name=password_name,
@@ -1392,6 +1432,55 @@ class GTKPassWindow(Adw.ApplicationWindow):
         )
         dialog.present(self)
         return dialog
+
+    def _rename_folder_dialog(
+        self, backend_id: str, folder: str
+    ) -> PasswordRenameDialog:
+        dialog = PasswordRenameDialog()
+        dialog.offer_folder(
+            current_name=folder,
+            taken=_folders_in(self.password_list.entry_names().get(backend_id, set())),
+            store_name=self._get_backend_display_name(backend_id),
+        )
+        dialog.connect(
+            "renamed",
+            lambda _dialog, new_path: self._move_folder(backend_id, folder, new_path),
+        )
+        dialog.present(self)
+        return dialog
+
+    def _move_folder(self, backend_id: str, old_path: str, new_path: str) -> None:
+        """Move a folder, off the UI thread as every other write is.
+
+        The longest write GTKPass makes: every entry under it, each of which
+        may need re-encrypting because the destination subtree has a .gpg-id of
+        its own, and then a commit.
+        """
+
+        def moved(_result):
+            self._toast(f"Moved {old_path} to {new_path}")
+            # Whatever the pane was showing may have been under the folder, and
+            # would now be at a path this window has not worked out. Following
+            # it would mean doing the move a second time to find out where it
+            # went, so let go and let the listing say what is there.
+            self.password_detail.clear()
+            self._set_shown(None)
+            self._showing_entry = False
+            self._show_placeholder("ready")
+            self._load_passwords()
+
+        def report(error):
+            logger.error(f"Could not move a folder in {backend_id}: {error}")
+            self._toast(f"Could not move {old_path}: {error}")
+
+        try:
+            future = self.backend_manager.move_folder_async(
+                backend_id, old_path, new_path
+            )
+        except ValueError as e:
+            report(e)
+            return
+        on_ui_thread(future, moved, report)
 
     def _move_entry(self, backend_id: str, old_name: str, new_name: str) -> None:
         """Move an entry, off the UI thread as every other write is."""
@@ -1534,6 +1623,22 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
     def _toast(self, message: str) -> None:
         self.toast_overlay.add_toast(Adw.Toast.new(message))
+
+
+def _folders_in(entry_names: set[str]) -> set[str]:
+    """Every folder path implied by a set of entry names.
+
+    A store has no folders of its own -- a folder exists because an entry's
+    name has a slash in it -- so the sidebar's entry list is where they come
+    from, and it is already in hand. What this is for is reporting a clash
+    while the new path is still being typed.
+    """
+    folders = set()
+    for name in entry_names:
+        parts = name.split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            folders.add("/".join(parts[:depth]))
+    return folders
 
 
 def _tilde(path: Path) -> str:

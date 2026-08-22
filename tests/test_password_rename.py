@@ -142,3 +142,87 @@ class TestRenaming:
         dialog.rename_button.emit("clicked")
 
         assert seen == []
+
+
+def offered_folder(dialog, current="work", taken=("work", "work/eu", "archive")):
+    dialog.offer_folder(current_name=current, taken=set(taken), store_name="My Vault")
+    return dialog
+
+
+class TestRenamingAFolder:
+    """The same dialog, because it is the same request: a path to move to.
+
+    A folder move is what the sidebar shows after a rename or a delete, seen
+    from the other end -- and moving one used to mean renaming every entry
+    under it by hand.
+    """
+
+    def test_it_says_it_is_a_folder(self, dialog):
+        offered_folder(dialog)
+
+        assert "Folder" in dialog.get_title()
+
+    def test_the_current_path_is_offered_to_be_edited(self, dialog):
+        offered_folder(dialog, current="work/eu")
+
+        assert dialog.name_row.get_text() == "work/eu"
+
+    def test_a_new_path_is_handed_over(self, dialog):
+        offered_folder(dialog)
+        seen = renames(dialog)
+
+        dialog.name_row.set_text("archive/2019/work")
+        dialog.rename_button.emit("clicked")
+
+        assert seen == ["archive/2019/work"]
+
+    def test_a_folder_that_is_already_there_is_refused(self, dialog):
+        offered_folder(dialog)
+        seen = renames(dialog)
+
+        dialog.name_row.set_text("archive")
+        dialog.rename_button.emit("clicked")
+
+        assert seen == []
+        assert dialog.name_row.has_css_class("error")
+
+    def test_moving_a_folder_into_itself_is_refused(self, dialog):
+        """It is not a rename that means anything, and pass would loop on it."""
+        offered_folder(dialog)
+        seen = renames(dialog)
+
+        dialog.name_row.set_text("work/old")
+        dialog.rename_button.emit("clicked")
+
+        assert seen == []
+        assert dialog.name_row.has_css_class("error")
+
+    def test_the_complaint_says_which_of_the_two_it_is(self, dialog):
+        offered_folder(dialog)
+
+        dialog.name_row.set_text("work/old")
+
+        assert "inside itself" in dialog.name_row.get_title()
+
+    def test_a_folder_whose_name_merely_starts_the_same_is_fine(self, dialog):
+        """``work`` moving to ``workshop`` is not moving it into itself."""
+        offered_folder(dialog)
+        seen = renames(dialog)
+
+        dialog.name_row.set_text("workshop")
+        dialog.rename_button.emit("clicked")
+
+        assert seen == ["workshop"]
+
+    def test_its_own_path_is_not_a_clash(self, dialog):
+        offered_folder(dialog)
+
+        assert not dialog.name_row.has_css_class("error")
+
+    def test_handing_back_its_own_path_does_nothing(self, dialog):
+        offered_folder(dialog)
+        seen = renames(dialog)
+
+        dialog.rename_button.emit("clicked")
+
+        assert seen == []

@@ -230,6 +230,11 @@ class RecordingBackend(DemoBackend):
     def move_password(self, old_name: str, new_name: str, commit: bool = True) -> None:
         self.moved.append((old_name, new_name))
 
+    def move_folder(
+        self, old_prefix: str, new_prefix: str, commit: bool = True
+    ) -> None:
+        self.moved.append((old_prefix, new_prefix))
+
 
 class TestMovingGoesThroughThePoolLikeEveryOtherWrite:
     """`pass mv` re-encrypts across a .gpg-id boundary and then commits.
@@ -274,3 +279,27 @@ class TestMovingGoesThroughThePoolLikeEveryOtherWrite:
         manager.shutdown()
 
         assert not backend.overlapped
+
+
+class TestMovingAFolderGoesThroughThePoolToo:
+    """A folder move is every entry re-encrypted and a commit; not UI work."""
+
+    def test_the_backend_is_asked_to_move_the_folder(self):
+        manager = BackendManager()
+        backend = RecordingBackend()
+        manager.add_backend("one", backend)
+
+        manager.move_folder_async("one", "work", "archive/work").result(
+            PATIENCE_SECONDS
+        )
+        manager.shutdown()
+
+        assert backend.moved == [("work", "archive/work")]
+
+    def test_an_unknown_backend_is_refused_before_anything_is_submitted(self):
+        manager = BackendManager()
+
+        with pytest.raises(ValueError):
+            manager.move_folder_async("absent", "a", "b")
+
+        manager.shutdown()

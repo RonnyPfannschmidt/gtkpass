@@ -37,7 +37,8 @@ What works today:
 - Rotating a password: make the replacement, take it to the site, and write the
   store only once you say the change took, so a site that refuses it costs you
   nothing
-- Renaming and moving an entry, which are one operation because a name is a path
+- Renaming and moving an entry -- one operation, because a name is a path --
+  and moving a whole folder, all or none of it
 - Deleting an entry, after being asked about it by name
 - A context menu on the sidebar rows, and a keyboard shortcut for everything
 - Syncing a git-backed store: pull with rebase, then push, off the UI thread

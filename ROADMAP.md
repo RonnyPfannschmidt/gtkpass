@@ -38,6 +38,9 @@ application; none of its dates survived contact with the work.
   so `pass mv` is what both go through, and the sidebar is listed again rather
   than relabelled -- a move empties the folder it left and makes the one it
   went to
+- Moving a whole folder, refused as a whole if any entry under it would clash,
+  because half a folder moved is a folder in two places with nothing to say
+  which half went
 - Editing an entry and writing it back through its backend
 - Rotating an entry, in the order that cannot lose an account: make the
   replacement, take it to the site, and write the store only once somebody says

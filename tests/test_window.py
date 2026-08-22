@@ -1892,6 +1892,200 @@ class TestRenamingAnEntry:
         assert run_in_application(ask)
 
 
+class TestRenamingAFolder:
+    """Moving a folder was renaming every entry under it, one at a time.
+
+    The sidebar shows folders and nothing could act on one, which is the same
+    gap the ROADMAP described from the delete side: an emptied folder that
+    lingers is a folder the interface has no operation for.
+    """
+
+    def renamable_window(self, app):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+        return window
+
+    def select_folder(self, window):
+        """Stand on the first folder row the demo store has."""
+        window.password_list.expand_all()
+        for index in range(window.password_list.tree_model.get_n_items()):
+            node = window.password_list.tree_model.get_row(index).get_item()
+            if not node.password_name and window.password_list._path_of(node):
+                window.password_list.selection.set_selected(index)
+                return window.password_list._path_of(node)
+        raise AssertionError("the demo store has no folders")
+
+    def test_a_selected_folder_can_be_renamed(self, demo_backend_configured):
+        def enabled(app):
+            window = self.renamable_window(app)
+            self.select_folder(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is True
+
+    def test_a_read_only_store_offers_nothing(self, demo_backend_configured):
+        def enabled(app):
+            window = listed_window(app)
+            self.select_folder(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is False
+
+    def test_the_dialog_starts_at_the_path_it_has(self, demo_backend_configured):
+        def ask(app):
+            window = self.renamable_window(app)
+            folder = self.select_folder(window)
+            dialog = window._open_rename_dialog()
+            return folder, dialog.name_row.get_text(), dialog.get_title()
+
+        folder, offered, title = run_in_application(ask)
+
+        assert offered == folder
+        assert "Folder" in title
+
+    def test_renaming_asks_the_backend_to_move_the_folder(
+        self, demo_backend_configured
+    ):
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_folder = lambda old, new, commit=True: moved.append((old, new))
+            folder = self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(moved), timeout_seconds=5.0)
+            return folder
+
+        folder = run_in_application(ask)
+
+        assert moved == [(folder, "archive/moved")]
+
+    def test_an_open_entry_does_not_shadow_the_selected_folder(
+        self, demo_backend_configured
+    ):
+        """Right-clicking a folder selects it, and the menu acts on what was
+        clicked -- not on whatever the pane happens to still be showing."""
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_folder = lambda old, new, commit=True: moved.append("folder")
+            backend.move_password = lambda old, new, commit=True: moved.append("entry")
+            window._on_password_selected(
+                DEMO_BACKEND_ID, backend.list_passwords()[0].name
+            )
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(moved), timeout_seconds=5.0)
+
+        run_in_application(ask)
+
+        assert moved == ["folder"]
+
+    @pytest.mark.parametrize(
+        "action_name", ["edit-password", "delete-password", "rotate-password"]
+    )
+    def test_the_entry_actions_go_away_while_a_folder_is_selected(
+        self, demo_backend_configured, action_name
+    ):
+        """Otherwise one menu acts on two different things.
+
+        Right-clicking a folder selects it and opens the menu over it. If Rename
+        moves that folder while Delete removes whatever the pane still happens
+        to be showing, the menu is a trap -- and the entry it would delete is
+        not even on screen.
+        """
+
+        def enabled(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            window._on_password_selected(
+                DEMO_BACKEND_ID, backend.list_passwords()[0].name
+            )
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            before = window.lookup_action(action_name).get_enabled()
+            self.select_folder(window)
+            return before, window.lookup_action(action_name).get_enabled()
+
+        before, after = run_in_application(enabled)
+
+        assert before is True, "the test proves nothing if it was already off"
+        assert after is False
+
+    def test_a_failed_folder_move_is_reported(self, demo_backend_configured):
+        from gtkpass.backends import BackendError
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+
+            def refuse(old, new, commit=True):
+                raise BackendError("something under it would be clobbered")
+
+            backend.move_folder = refuse
+            toasts: list[str] = []
+            window._toast = toasts.append
+            self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(toasts), timeout_seconds=5.0)
+            return toasts
+
+        toasts = run_in_application(ask)
+
+        assert toasts and "would be clobbered" in toasts[0]
+
+    def test_the_pane_lets_go_of_an_entry_that_was_under_it(
+        self, demo_backend_configured
+    ):
+        """What was on display is now at a path this window does not know.
+
+        Following it would mean working out its new name, which is the folder
+        move done twice -- so the pane is cleared and the sidebar re-listed.
+        """
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_folder = lambda old, new, commit=True: None
+            nested = next(
+                entry.name for entry in backend.list_passwords() if "/" in entry.name
+            )
+            window._on_password_selected(DEMO_BACKEND_ID, nested)
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: window._shown is None, timeout_seconds=5.0)
+            return window._shown
+
+        assert run_in_application(ask) is None
+
+
 class TestRotating:
     """Rotating puts the store last, which is the whole reason it exists.
 

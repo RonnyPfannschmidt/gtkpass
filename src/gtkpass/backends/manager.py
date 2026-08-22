@@ -285,6 +285,36 @@ class BackendManager:
 
         return self._executor.submit(backend.move_password, old_name, new_name)
 
+    def move_folder_async(
+        self,
+        backend_id: str,
+        old_prefix: str,
+        new_prefix: str,
+    ) -> concurrent.futures.Future:
+        """Move a whole folder asynchronously.
+
+        Every entry under it, each of which may need re-encrypting because the
+        destination subtree has a .gpg-id of its own, and then a commit. The
+        longest write GTKPass makes, and the last one that should happen on the
+        UI thread.
+
+        Args:
+            backend_id: Backend identifier
+            old_prefix: The folder's path today, without a trailing slash
+            new_prefix: The path it is to have
+
+        Returns:
+            Future that completes when the move has landed
+
+        Raises:
+            ValueError: If backend not initialized
+        """
+        backend = self._backends.get(backend_id)
+        if not backend:
+            raise ValueError(f"Backend '{backend_id}' not initialized")
+
+        return self._executor.submit(backend.move_folder, old_prefix, new_prefix)
+
     def writable_backends(self) -> list[str]:
         """Backends that can be written to, in the order they were added.
 

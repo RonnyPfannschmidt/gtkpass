@@ -514,6 +514,94 @@ class TestIcons:
         assert self.icon_of(view, "Demo") == "emblem-default-symbolic"
 
 
+class TestWhichFolderIsSelected:
+    """Renaming a folder needs to know that a folder is what is selected.
+
+    ``selected_folder`` answers "which folder is the selection standing in",
+    which is what the add dialog wants -- and it answers the empty string both
+    for a backend heading and for an entry at the root of a store. Neither of
+    those is a folder that can be renamed, and neither can be told apart from
+    the other by that answer.
+    """
+
+    def select(self, view, name):
+        view.expand_all()
+        for index in range(view.tree_model.get_n_items()):
+            node = view.tree_model.get_row(index).get_item()
+            if node.name == name:
+                view.selection.set_selected(index)
+                return
+        raise AssertionError(f"no row called {name!r}")
+
+    def test_a_folder_is_reported_with_its_backend(self, view, backend):
+        view.add_password(backend, "work/mail")
+        self.select(view, "work")
+
+        assert view.get_selected_folder() == (backend.backend_id, "work")
+
+    def test_a_nested_folder_carries_its_whole_path(self, view, backend):
+        view.add_password(backend, "work/eu/tax")
+        self.select(view, "eu")
+
+        assert view.get_selected_folder() == (backend.backend_id, "work/eu")
+
+    def test_an_entry_is_not_a_folder(self, view, backend):
+        view.add_password(backend, "work/mail")
+        self.select(view, "mail")
+
+        assert view.get_selected_folder() is None
+
+    def test_an_entry_at_the_root_is_not_a_folder(self, view, backend):
+        """The case ``selected_folder`` cannot distinguish: it answers "" here
+        and "" for a backend heading as well."""
+        view.add_password(backend, "loose")
+        self.select(view, "loose")
+
+        assert view.get_selected_folder() is None
+
+    def test_a_backend_heading_is_not_a_folder(self, view, backend):
+        view.add_password(backend, "work/mail")
+        view.selection.set_selected(0)
+
+        assert view.get_selected_folder() is None
+
+    def test_nothing_selected_is_not_a_folder(self, view, backend):
+        assert view.get_selected_folder() is None
+
+
+class TestTheWindowHearsAboutEverySelection:
+    """Not only about entries.
+
+    ``connect_password_selected`` fires for an entry and stays silent for a
+    folder, because its job is "decrypt this". Which actions are offered is a
+    different question, and a folder is an answer to it: renaming applies to
+    one, and deleting the entry the pane still holds does not.
+    """
+
+    def selections(self, view):
+        seen: list[int] = []
+        view.connect("selection-changed", lambda _view: seen.append(1))
+        return seen
+
+    def test_selecting_an_entry_is_announced(self, view, backend):
+        view.add_password(backend, "work/mail")
+        view.expand_all()
+        seen = self.selections(view)
+
+        view.selection.set_selected(2)
+
+        assert seen
+
+    def test_selecting_a_folder_is_announced_too(self, view, backend):
+        view.add_password(backend, "work/mail")
+        view.expand_all()
+        seen = self.selections(view)
+
+        view.selection.set_selected(1)
+
+        assert seen
+
+
 class TestTheContextMenu:
     """Right-click, and press-and-hold, offer the entry actions on the row.
 

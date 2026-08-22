@@ -303,6 +303,36 @@ class DirectBackend(PasswordBackend):
         self._prune_empty_parents(source.parent)
         self._record(commit, [source, destination], f"Rename {old_name} to {new_name}.")
 
+    def move_folder(
+        self, old_prefix: str, new_prefix: str, commit: bool = True
+    ) -> None:
+        """Move a folder in one commit rather than one per entry.
+
+        The inherited default moves the entries one at a time, and each of
+        those commits. A folder of twenty entries becomes twenty revisions of
+        one operation, which makes the history harder to read for exactly the
+        change somebody would go looking for. The work per entry is the same --
+        the recipients still decide whether a rename is enough -- so all that
+        moves is where the commit happens.
+        """
+        ensure_approved(self._recipient_audit)
+        moves = self.plan_folder_move(old_prefix, new_prefix)
+
+        touched: list[Path] = []
+        for old_name, new_name in moves:
+            source = self._path_for(old_name)
+            destination = self._path_for(new_name)
+            self._reencrypt_or_rename(source, destination)
+            touched += [source, destination]
+        # After all of them: pruning as each entry leaves would remove a parent
+        # that the next one is still standing in.
+        for old_name, _ in moves:
+            self._prune_empty_parents(self._path_for(old_name).parent)
+
+        self._record(
+            commit, touched, f"Move {old_prefix.strip('/')} to {new_prefix.strip('/')}."
+        )
+
     def copy_password(self, source: str, dest: str, commit: bool = True) -> None:
         ensure_approved(self._recipient_audit)
         source_path = self._path_for(source)
@@ -368,6 +398,12 @@ class DirectBackend(PasswordBackend):
         root = self.password_store_dir.resolve()
         directory = directory.resolve()
         while directory != root and root in directory.parents:
+            if not directory.is_dir():
+                # Already gone. A folder move prunes after every entry, and
+                # emptying "work/eu" takes "work" with it -- so by the time the
+                # entry that lived directly in "work" is pruned for, there is
+                # nothing there to look inside.
+                break
             if any(directory.iterdir()):
                 break
             directory.rmdir()

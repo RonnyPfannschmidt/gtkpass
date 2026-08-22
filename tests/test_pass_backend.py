@@ -398,6 +398,89 @@ class TestAnEntryNameIsNeverReadAsAnOption:
         assert self.names_in(recorded_runs[-1][0]) == ["email/work"]
 
 
+class TestMovingAFolder:
+    """One `pass mv` per entry, not one for the directory.
+
+    `pass mv work archive` is `mv` semantics: whether it renames the folder or
+    moves it *inside* an existing one depends on whether the destination is
+    already a directory. That is two different results from one request, and
+    the answer depends on the state of the store rather than on what was asked
+    -- so the entries are moved individually, where the destination path is
+    written out in full and there is nothing to interpret.
+
+    pass still does the work per entry: it re-encrypts when the destination
+    subtree has a .gpg-id of its own, which a filesystem move would not.
+    """
+
+    def create(self, store):
+        return PassBackend.create(PassBackendSettings(password_store_dir=store))
+
+    @pytest.fixture
+    def populated(self, store):
+        for name in ("work/mail", "work/eu/tax", "workshop/lathe"):
+            path = store / f"{name}.gpg"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"\x01ciphertext")
+        return store
+
+    def moves(self, recorded_runs):
+        """The (source, destination) pair of every `pass mv` that was run."""
+        return [
+            tuple(cmd[cmd.index("--") + 1 :]) for cmd, _ in recorded_runs if "mv" in cmd
+        ]
+
+    def test_every_entry_under_it_is_moved(
+        self, pass_on_path, populated, recorded_runs
+    ):
+        self.create(populated).move_folder("work", "archive/2019")
+
+        assert sorted(self.moves(recorded_runs)) == [
+            ("work/eu/tax", "archive/2019/eu/tax"),
+            ("work/mail", "archive/2019/mail"),
+        ]
+
+    def test_a_sibling_whose_name_starts_the_same_is_not_taken_along(
+        self, pass_on_path, populated, recorded_runs
+    ):
+        self.create(populated).move_folder("work", "archive")
+
+        assert not [move for move in self.moves(recorded_runs) if "workshop" in move[0]]
+
+    def test_a_folder_that_is_not_there_runs_nothing(
+        self, pass_on_path, populated, recorded_runs
+    ):
+        backend = self.create(populated)
+
+        with pytest.raises(FileNotFoundError):
+            backend.move_folder("absent", "archive")
+
+        assert self.moves(recorded_runs) == []
+
+    def test_a_clash_runs_nothing_at_all(self, pass_on_path, populated, recorded_runs):
+        """Not even the entries that would not have clashed.
+
+        Half a folder moved is a folder in two places, and nothing says which
+        half went.
+        """
+        clashing = populated / "archive" / "mail.gpg"
+        clashing.parent.mkdir(parents=True)
+        clashing.write_bytes(b"\x01ciphertext")
+        backend = self.create(populated)
+
+        with pytest.raises(FileExistsError):
+            backend.move_folder("work", "archive")
+
+        assert self.moves(recorded_runs) == []
+
+    def test_the_names_are_still_terminated(
+        self, pass_on_path, populated, recorded_runs
+    ):
+        """A folder move is another call site, and the rule is every one."""
+        self.create(populated).move_folder("work", "archive")
+
+        assert all("--" in cmd for cmd, _ in recorded_runs if "mv" in cmd)
+
+
 class TestSearchMatchesNames:
     """Search must not decrypt.
 

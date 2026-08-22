@@ -53,6 +53,8 @@ class PasswordRenameDialog(Adw.Dialog):
     #: it as the user types.
     NAME_TITLE = "Name"
     NAME_TAKEN = "Name (an entry of this name is already there)"
+    FOLDER_TAKEN = "Name (a folder of this name is already there)"
+    FOLDER_INSIDE_ITSELF = "Name (a folder cannot be moved inside itself)"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -61,6 +63,11 @@ class PasswordRenameDialog(Adw.Dialog):
         self._current_name = ""
         #: Every other name the store holds.
         self._taken: set[str] = set()
+        #: Whether a folder is being moved rather than an entry. The request is
+        #: the same -- a path to move to -- but what counts as a refusal is
+        #: not: an entry cannot be moved inside itself because it has no
+        #: inside.
+        self._folder = False
 
     def offer(self, current_name: str, taken: set[str], store_name: str) -> None:
         """Say what is being renamed, and what it may not be renamed to.
@@ -72,6 +79,23 @@ class PasswordRenameDialog(Adw.Dialog):
             store_name: The backend's display name, shown because the move
                 stays inside it.
         """
+        self._folder = False
+        self.set_title("Rename Password")
+        self._start(current_name, taken, store_name)
+
+    def offer_folder(self, current_name: str, taken: set[str], store_name: str) -> None:
+        """Say which folder is being moved, and what it may not be moved to.
+
+        Args:
+            current_name: The folder's path today.
+            taken: Every folder path in the store, this one included.
+            store_name: The backend's display name.
+        """
+        self._folder = True
+        self.set_title("Rename Folder")
+        self._start(current_name, taken, store_name)
+
+    def _start(self, current_name: str, taken: set[str], store_name: str) -> None:
         self._current_name = current_name
         self._taken = set(taken) - {current_name}
 
@@ -94,15 +118,32 @@ class PasswordRenameDialog(Adw.Dialog):
         """Say that a name is already taken while it is still being typed."""
         self._validate_name()
 
+    def _complaint(self) -> str:
+        """What is wrong with the name as typed, or the empty string.
+
+        The trailing slash on the containment test is the whole of it: without
+        it, moving ``work`` to ``workshop`` reads as moving a folder inside
+        itself, and the one rename somebody is most likely to want is the one
+        that is refused.
+        """
+        name = self.name
+        if not name:
+            return ""
+        if name in self._taken:
+            return self.FOLDER_TAKEN if self._folder else self.NAME_TAKEN
+        if self._folder and name.startswith(f"{self._current_name}/"):
+            return self.FOLDER_INSIDE_ITSELF
+        return ""
+
     def _validate_name(self) -> bool:
-        taken = bool(self.name) and self.name in self._taken
-        if taken:
+        complaint = self._complaint()
+        if complaint:
             self.name_row.add_css_class("error")
-            self.name_row.set_title(self.NAME_TAKEN)
+            self.name_row.set_title(complaint)
         else:
             self.name_row.remove_css_class("error")
             self.name_row.set_title(self.NAME_TITLE)
-        return not taken
+        return not complaint
 
     @Gtk.Template.Callback()
     def _on_rename(self, _widget) -> None:
