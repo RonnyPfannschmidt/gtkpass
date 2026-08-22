@@ -34,10 +34,12 @@ from gtkpass.ui.password_detail import (  # noqa: F401
     URL_KEYS,
     USERNAME_KEYS,
     PasswordDetailView,
+    field_of,
 )
 from gtkpass.ui.password_edit import PasswordEditDialog
 from gtkpass.ui.password_list import PasswordTreeView  # noqa: F401
 from gtkpass.ui.password_rename import PasswordRenameDialog
+from gtkpass.ui.password_rotate import PasswordRotateDialog
 from gtkpass.utils.async_ui import on_ui_thread
 from gtkpass.utils.clipboard import ClipboardCopier
 
@@ -236,6 +238,14 @@ class GTKPassWindow(Adw.ApplicationWindow):
         rename_action.set_enabled(False)
         self.add_action(rename_action)
 
+        # Rotating: making a new password, taking it to the site, and only then
+        # writing. Open on the same two conditions as editing, because that is
+        # what it ends in.
+        rotate_action = Gio.SimpleAction.new("rotate-password", None)
+        rotate_action.connect("activate", self._on_rotate_password)
+        rotate_action.set_enabled(False)
+        self.add_action(rotate_action)
+
         # Nothing is syncable until the backends have loaded and reported what
         # their stores are, so this starts closed and _refresh_sync_action
         # opens it.
@@ -327,7 +337,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
         backend_id, password_name = selected
 
         def copy(entry):
-            value = _field_of(entry, field)
+            value = field_of(entry, field)
             entry.clear_password()
             if not value:
                 self._toast(f"{password_name} has no {field.lower()}")
@@ -604,7 +614,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
         # Deleting and renaming both need an entry as well as a store that will
         # take the change.
         writable_entry = self._shown is not None and self._shown[0] in writable
-        for name in ("delete-password", "rename-password"):
+        for name in ("delete-password", "rename-password", "rotate-password"):
             action = self.lookup_action(name)
             if action is not None:
                 action.set_enabled(writable_entry)
@@ -1308,6 +1318,46 @@ class GTKPassWindow(Adw.ApplicationWindow):
         dialog.present(self)
         return dialog
 
+    def _on_rotate_password(self, action, param):
+        """Handle the rotate action."""
+        self._open_rotate_dialog()
+
+    def _open_rotate_dialog(self) -> PasswordRotateDialog | None:
+        """Walk a password change through, writing the store last.
+
+        Returns the dialog, as the other three do, so a test can drive it to a
+        response rather than only prove it was built.
+
+        Returns:
+            The dialog, or None when there is nothing rotatable on display.
+        """
+        entry = self.password_detail.entry
+        if self._shown is None or entry is None:
+            return None
+
+        backend_id, password_name = self._shown
+        dialog = PasswordRotateDialog()
+        if not dialog.load(
+            entry, store_name=self._get_backend_display_name(backend_id)
+        ):
+            # The decrypt has not come back, so there is no entry to keep the
+            # rest of. Writing now would replace it with a password and nothing
+            # else.
+            self._toast(f"{password_name} has not been opened yet")
+            return None
+
+        # Through the window's clipboard rather than the wizard's own: one
+        # owner, cleared on one timer and taken back at quit.
+        dialog.connect("copy-requested", self._on_copy_requested)
+        dialog.connect(
+            "rotated",
+            lambda _dialog, content: self._save_entry(
+                backend_id, password_name, content
+            ),
+        )
+        dialog.present(self)
+        return dialog
+
     def _on_rename_password(self, action, param):
         """Handle the rename action."""
         self._open_rename_dialog()
@@ -1492,22 +1542,6 @@ def _tilde(path: Path) -> str:
         return f"~/{path.relative_to(Path.home())}"
     except ValueError:
         return str(path)
-
-
-def _field_of(entry, field: str) -> str:
-    """One of the copyable fields, read straight off a decrypted entry.
-
-    The same keys the detail pane picks its rows out with, so a copy made
-    without opening an entry lands on the same value as one made from the pane.
-    """
-    if field == "Password":
-        return entry.password or ""
-    keys = {"Username": USERNAME_KEYS, "URL": URL_KEYS}[field]
-    metadata = entry.metadata
-    for key in keys:
-        if metadata.get(key):
-            return metadata[key]
-    return ""
 
 
 def _recipient_lines(audit) -> str:

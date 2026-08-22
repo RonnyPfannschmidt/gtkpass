@@ -13,6 +13,27 @@ USERNAME_KEYS = ("username", "user", "login")
 #: Likewise for the site a password belongs to.
 URL_KEYS = ("url", "website", "uri")
 
+
+def field_of(entry: PasswordEntry, field: str) -> str:
+    """One of the copyable fields, read straight off a decrypted entry.
+
+    Here rather than beside its callers because there are three of them now --
+    the window copies a field without opening an entry, the rotation wizard
+    shows the username and the site, and this pane picks its own rows out the
+    same way. Three copies of "which key means the account name" is three
+    chances for a store written by another tool to be read differently in two
+    places in the same window.
+    """
+    if field == "Password":
+        return entry.password or ""
+    keys = {"Username": USERNAME_KEYS, "URL": URL_KEYS}[field]
+    metadata = entry.metadata
+    for key in keys:
+        if metadata.get(key):
+            return metadata[key]
+    return ""
+
+
 #: Keys the pane has a row of its own for. Everything else is shown as it was
 #: written rather than dropped: a store carries whatever its owner put there.
 KNOWN_KEYS = frozenset(USERNAME_KEYS + URL_KEYS + ("notes",))

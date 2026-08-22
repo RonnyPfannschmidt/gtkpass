@@ -30,13 +30,20 @@ What works today:
   shown, whether or not GTKPass knows what the field means
 - Copying a field, with the clipboard cleared again after a timeout
 - Adding an entry, with a generated password if you want one
+- Generating by any of three schemes -- random characters, a diceware
+  passphrase, or digits for a PIN -- with the entropy of each shown, wherever
+  a password is set
 - Editing an entry and writing it back through its backend
+- Rotating a password: make the replacement, take it to the site, and write the
+  store only once you say the change took, so a site that refuses it costs you
+  nothing
+- Renaming and moving an entry, which are one operation because a name is a path
 - Deleting an entry, after being asked about it by name
 - A context menu on the sidebar rows, and a keyboard shortcut for everything
 - Syncing a git-backed store: pull with rebase, then push, off the UI thread
 
-What does not exist yet: renaming and moving entries, OTP codes, and
-re-encrypting a store to a changed recipient set. See [ROADMAP.md](ROADMAP.md).
+What does not exist yet: OTP codes, and re-encrypting a store to a changed
+recipient set. See [ROADMAP.md](ROADMAP.md).
 
 ## Backends
 
@@ -149,3 +156,7 @@ MPL-2.0. See [LICENSE](LICENSE).
 
 - [passwordstore](https://www.passwordstore.org/) — the original `pass`
 - [qtpass](https://qtpass.org/) — the inspiration
+- The [EFF long wordlist](https://www.eff.org/dice), which the passphrase
+  generator draws from. Copyright Electronic Frontier Foundation, used under
+  [CC BY 3.0 US](https://creativecommons.org/licenses/by/3.0/us/); shipped
+  verbatim as `src/gtkpass/utils/data/eff_large_wordlist.txt`

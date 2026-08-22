@@ -1892,6 +1892,203 @@ class TestRenamingAnEntry:
         assert run_in_application(ask)
 
 
+class TestRotating:
+    """Rotating puts the store last, which is the whole reason it exists.
+
+    Through the editor the write lands first and the site second, so a site
+    that refuses the new password leaves the store holding one that does not
+    work. The wizard writes only after somebody says the change took.
+    """
+
+    def rotatable_window(self, app):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+        return window
+
+    def open_entry(self, window):
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        name = backend.list_passwords()[0].name
+        window._on_password_selected(DEMO_BACKEND_ID, name)
+        pump_until(
+            lambda: window.password_detail.stack.get_visible_child_name() == "content"
+        )
+        return name
+
+    def test_nothing_is_offered_before_an_entry_is_open(self, demo_backend_configured):
+        def enabled(app):
+            return self.rotatable_window(app).lookup_action("rotate-password")
+
+        assert run_in_application(enabled).get_enabled() is False
+
+    def test_an_open_entry_can_be_rotated(self, demo_backend_configured):
+        def enabled(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rotate-password").get_enabled()
+
+        assert run_in_application(enabled) is True
+
+    def test_a_read_only_store_offers_nothing(self, demo_backend_configured):
+        def enabled(app):
+            window = listed_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rotate-password").get_enabled()
+
+        assert run_in_application(enabled) is False
+
+    def test_the_wizard_opens_on_the_entry_on_display(self, demo_backend_configured):
+        def ask(app):
+            window = self.rotatable_window(app)
+            name = self.open_entry(window)
+            dialog = window._open_rotate_dialog()
+            return name, dialog.entry_row.get_title()
+
+        name, shown = run_in_application(ask)
+
+        assert shown == name
+
+    def test_it_arrives_with_a_replacement_already_made(self, demo_backend_configured):
+        def ask(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            dialog = window._open_rotate_dialog()
+            return dialog.new_row.get_text(), dialog.current_row.get_text()
+
+        new, current = run_in_application(ask)
+
+        assert new
+        assert new != current
+
+    def test_getting_to_the_end_writes_the_new_password(self, demo_backend_configured):
+        saved = []
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.edit_password = lambda name, content, commit=True: saved.append(
+                (name, content)
+            )
+            name = self.open_entry(window)
+
+            dialog = window._open_rotate_dialog()
+            dialog.new_row.set_text("the-rotated-one")
+            dialog.to_site_button.emit("clicked")
+            dialog.to_confirm_button.emit("clicked")
+            dialog.save_button.emit("clicked")
+            pump_until(lambda: bool(saved), timeout_seconds=5.0)
+            return name
+
+        name = run_in_application(ask)
+
+        assert len(saved) == 1
+        written_to, content = saved[0]
+        assert written_to == name
+        assert content.split("\n")[0] == "the-rotated-one"
+
+    def test_nothing_is_written_before_the_last_page(self, demo_backend_configured):
+        """The site can still refuse it, and the store must still work."""
+        saved = []
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.edit_password = lambda name, content, commit=True: saved.append(
+                name
+            )
+            self.open_entry(window)
+
+            dialog = window._open_rotate_dialog()
+            dialog.to_site_button.emit("clicked")
+            dialog.to_confirm_button.emit("clicked")
+            pump_until(lambda: False, timeout_seconds=0.3)
+
+        run_in_application(ask)
+
+        assert saved == []
+
+    def test_everything_below_the_password_survives_the_rotation(
+        self, demo_backend_configured
+    ):
+        saved = []
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.edit_password = lambda name, content, commit=True: saved.append(
+                content
+            )
+            name = next(
+                entry.name
+                for entry in backend.list_passwords()
+                if "\n" in (backend.get_password(entry.name).content or "")
+            )
+            window._on_password_selected(DEMO_BACKEND_ID, name)
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            original = backend.get_password(name).content
+
+            dialog = window._open_rotate_dialog()
+            dialog.to_site_button.emit("clicked")
+            dialog.to_confirm_button.emit("clicked")
+            dialog.save_button.emit("clicked")
+            pump_until(lambda: bool(saved), timeout_seconds=5.0)
+            return original
+
+        original = run_in_application(ask)
+
+        below = original.partition("\n")[2]
+        assert below
+        assert saved[0].endswith(below)
+
+    def test_a_copy_made_in_the_wizard_goes_through_the_window(
+        self, demo_backend_configured
+    ):
+        """One clipboard, cleared on one timer, taken back at quit.
+
+        A second owner in the wizard would leave a secret behind that nothing
+        takes away again.
+        """
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            copied: list[tuple[str, str]] = []
+            window._on_copy_requested = lambda _source, field, value: copied.append(
+                (field, value)
+            )
+
+            dialog = window._open_rotate_dialog()
+            dialog.copy_new_button.emit("clicked")
+            return copied, dialog.new_row.get_text()
+
+        copied, generated = run_in_application(ask)
+
+        assert copied == [("Password", generated)]
+
+    def test_an_entry_that_never_decrypted_offers_no_wizard(
+        self, demo_backend_configured
+    ):
+        """The pane can hold an entry whose content did not arrive."""
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            window.password_detail.entry.content = None
+            toasts: list[str] = []
+            window._toast = toasts.append
+
+            return window._open_rotate_dialog(), toasts
+
+        dialog, toasts = run_in_application(ask)
+
+        assert dialog is None
+        assert toasts
+
+
 class TestACopiedSecretIsTakenBack:
     """A copy is kept for as long as there is a reason to keep it.
 

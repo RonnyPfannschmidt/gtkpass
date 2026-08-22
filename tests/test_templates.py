@@ -14,6 +14,7 @@ from gtkpass.ui.password_edit import PasswordEditDialog
 from gtkpass.ui.password_generator import PasswordGeneratorGroup
 from gtkpass.ui.password_list import PasswordTreeView
 from gtkpass.ui.password_rename import PasswordRenameDialog
+from gtkpass.ui.password_rotate import PasswordRotateDialog
 
 pytestmark = pytest.mark.gui
 
@@ -24,6 +25,7 @@ STANDALONE_WIDGETS = [
     PasswordEditDialog,
     PasswordRenameDialog,
     PasswordGeneratorGroup,
+    PasswordRotateDialog,
 ]
 
 

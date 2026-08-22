@@ -39,6 +39,10 @@ application; none of its dates survived contact with the work.
   than relabelled -- a move empties the folder it left and makes the one it
   went to
 - Editing an entry and writing it back through its backend
+- Rotating an entry, in the order that cannot lose an account: make the
+  replacement, take it to the site, and write the store only once somebody says
+  the change took -- the editor writes first and leaves a store holding a
+  password the site refused
 - Deleting an entry, after a question that names it and the store it leaves
 - A context menu on the sidebar rows, reached by right-click or press-and-hold
 - An accelerator for every action, and a window that documents them
@@ -96,9 +100,6 @@ Roughly in the order that would make the application usable day to day.
   usable from both. Generating the code is RFC 6238 over `hmac` — the work is in
   the entry format and the interface, not the arithmetic. QR code scanning is
   not part of this and stays out; see below.
-- **`pass-update`.** Rotating an entry's password while keeping the metadata
-  below it, which is the operation people reach for most often after reading
-  one.
 - **Re-encrypting a store to a changed recipient set**, which `pass init
   <ids...>` does and GTKPass cannot. Multi-recipient stores already work, so a
   per-machine key model is adoptable today — but enrolling a machine or retiring
