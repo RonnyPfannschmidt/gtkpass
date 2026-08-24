@@ -10,9 +10,18 @@ as installed, not assumed.
 
 ```bash
 make flatpak       # build and install for the current user
-make flatpak-run
+make flatpak-run   # builds first if anything changed, then runs it
 make flatpak-lint  # the checks Flathub runs on submission
 ```
+
+`make flatpak-run` builds before it runs, and this is not a convenience.
+Running whatever was installed last is a quiet wrong answer: you change
+something, run it, and are looking at the previous build while believing you
+are looking at your change -- so the command that fails to reproduce a bug also
+fails to reproduce a fix, with nothing on screen to say which build is on
+screen. It is cheap when nothing changed (`dist/flatpak/.installed` is the
+stamp make compares against) and about twelve seconds when something did, the
+module cache in `.flatpak-builder/` surviving `--force-clean`.
 
 The first build downloads `org.gnome.Sdk//50`, which is a couple of gigabytes.
 
