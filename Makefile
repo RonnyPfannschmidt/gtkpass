@@ -311,10 +311,17 @@ flatpak: $(FLATPAK_STAMP)
 # --force-clean empties .flatpak-build, not .flatpak-builder: the module cache
 # survives, so an unchanged git, tree and pass are not built again and this
 # costs about twelve seconds.
+#
+# --delete-build-dirs because flatpak-builder removes a module's build tree on
+# success only. One interrupted build leaves it in .flatpak-builder/build and
+# nothing ever comes back for it; two had accumulated to half a gigabyte before
+# anybody looked, the older of them by months. This is not the module cache,
+# which lives beside it and is what keeps a rebuild cheap.
 $(FLATPAK_STAMP): $(PACKAGE_SOURCES) $(FLATPAK_MANIFEST)
 	flatpak remote-add --user --if-not-exists \
 		flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-	flatpak-builder --force-clean --user --install --install-deps-from=flathub \
+	flatpak-builder --force-clean --delete-build-dirs --user --install \
+		--install-deps-from=flathub \
 		.flatpak-build $(FLATPAK_MANIFEST)
 	@mkdir -p $(dir $@)
 	@touch $@
@@ -347,7 +354,7 @@ flatpak-lint:
 		$(FLATPAK_MANIFEST)
 
 flatpak-lint-repo:
-	flatpak-builder --force-clean --user --repo=.flatpak-repo \
+	flatpak-builder --force-clean --delete-build-dirs --user --repo=.flatpak-repo \
 		.flatpak-build $(FLATPAK_MANIFEST)
 	flatpak run --no-documents-portal \
 		--command=flatpak-builder-lint org.flatpak.Builder repo \

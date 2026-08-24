@@ -373,6 +373,23 @@ class TestRunningAPackageBuildsItFirst:
 
         assert "blueprint-compiler" in planned
 
+    def test_a_failed_build_does_not_leave_its_build_dir_behind(
+        self, everything_out_of_date
+    ):
+        """flatpak-builder removes build directories on success only.
+
+        A build interrupted or failed leaves its module tree in
+        .flatpak-builder/build, and nothing ever comes back for it -- two of
+        them had accumulated to half a gigabyte before anyone looked, one of
+        them months old. --delete-build-dirs removes them either way.
+
+        The module cache is a different directory and is not affected; that one
+        is what keeps a rebuild at twelve seconds instead of compiling git.
+        """
+        planned = self.dry_run(everything_out_of_date, "flatpak")
+
+        assert "--delete-build-dirs" in planned
+
     def test_nothing_is_rebuilt_when_nothing_changed(self):
         """The stamp is the point: this has to stay cheap enough to always run.
 
