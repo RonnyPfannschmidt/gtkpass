@@ -398,6 +398,78 @@ class TestAnEntryNameIsNeverReadAsAnOption:
         assert self.names_in(recorded_runs[-1][0]) == ["email/work"]
 
 
+class TestEncryptingDoesNotConsultTheWebOfTrust:
+    """The recipients in .gpg-id are the decision; ownertrust is not.
+
+    Reported from the Flatpak: adding or editing an entry failed, and the
+    message was cropped to one line so there was nothing to go on. What gpg was
+    actually saying was::
+
+        gpg: <key>: There is no assurance this key belongs to the named user
+        gpg: [stdin]: encryption failed: Unusable public key
+
+    The sandbox is granted the public keyring read-only and nothing else, so
+    gpg finds no trustdb, builds an empty one, and every recipient in it is
+    unknown -- at which point it refuses to encrypt to any of them.
+
+    Whether a key is trusted is not the question a password store asks. The
+    question is whether .gpg-id names who it should, and GTKPass answers that
+    separately: backends/recipients.py refuses to write at all when that file
+    has changed without review. DirectBackend has passed always_trust since it
+    was written; this is pass being brought into line with it, so that two
+    backends over the same store stop behaving differently.
+    """
+
+    def create(self, store):
+        return PassBackend.create(PassBackendSettings(password_store_dir=store))
+
+    def test_pass_is_told_not_to_require_ownertrust(self, pass_on_path, store):
+        backend = self.create(store)
+
+        assert "--trust-model=always" in backend._env["PASSWORD_STORE_GPG_OPTS"]
+
+    def test_every_call_carries_it(self, pass_on_path, store, recorded_runs):
+        """It is the environment pass reads, so it applies to insert and mv alike."""
+        backend = self.create(store)
+        (store / "a.gpg").write_bytes(b"\x01ciphertext")
+
+        backend.add_password("new", "x")
+        backend.edit_password("a", "y")
+        backend.move_password("a", "b")
+
+        assert recorded_runs, "nothing ran, so this proves nothing"
+        for cmd, kwargs in recorded_runs:
+            assert "--trust-model=always" in kwargs["env"]["PASSWORD_STORE_GPG_OPTS"], (
+                f"{cmd} would ask gpg to consult the web of trust"
+            )
+
+    def test_options_the_user_already_set_are_kept(
+        self, pass_on_path, store, monkeypatch
+    ):
+        """PASSWORD_STORE_GPG_OPTS is the user's variable before it is ours.
+
+        Overwriting it would silently drop whatever they had configured -- a
+        keyserver, a cipher preference, --no-encrypt-to.
+        """
+        monkeypatch.setenv("PASSWORD_STORE_GPG_OPTS", "--compress-algo=none")
+
+        backend = self.create(store)
+
+        options = backend._env["PASSWORD_STORE_GPG_OPTS"]
+        assert "--compress-algo=none" in options
+        assert "--trust-model=always" in options
+
+    def test_a_trust_model_the_user_chose_is_left_alone(
+        self, pass_on_path, store, monkeypatch
+    ):
+        """Somebody who set one meant it, and two would contradict each other."""
+        monkeypatch.setenv("PASSWORD_STORE_GPG_OPTS", "--trust-model=tofu")
+
+        backend = self.create(store)
+
+        assert backend._env["PASSWORD_STORE_GPG_OPTS"] == "--trust-model=tofu"
+
+
 class TestMovingAFolder:
     """One `pass mv` per entry, not one for the directory.
 

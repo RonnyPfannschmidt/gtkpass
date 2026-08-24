@@ -25,6 +25,34 @@ module cache in `.flatpak-builder/` surviving `--force-clean`.
 
 The first build downloads `org.gnome.Sdk//50`, which is a couple of gigabytes.
 
+## Why the sandbox does not consult the web of trust
+
+The sandbox is granted the public keyring read-only and nothing else under
+`~/.gnupg` -- no `trustdb.gpg`, because that is host state gpg wants to write.
+So gpg finds no trustdb, builds an empty one, and every recipient in it is
+unknown. It then refuses to encrypt to any of them:
+
+```
+gpg: <key>: There is no assurance this key belongs to the named user
+gpg: [stdin]: encryption failed: Unusable public key
+```
+
+Which is what adding or editing an entry did, in the Flatpak only, for as long
+as there was one.
+
+Whether a key is trusted is not the question a password store asks. The
+question is whether `.gpg-id` names who it should, and that is asked and
+answered in `backends/recipients.py`, which refuses the write outright when
+that file has changed without review. So both backends encrypt with
+`--trust-model=always`: `DirectBackend` through python-gnupg's `always_trust`,
+which it has always done, and `PassBackend` through `PASSWORD_STORE_GPG_OPTS`,
+which it now does too. Two backends over one store must not disagree about
+whether it can be written to.
+
+Granting `~/.gnupg/trustdb.gpg` instead was the alternative and is worse: it is
+per-machine state, gpg wants it writable, and it would leave the two backends
+disagreeing everywhere the Flatpak is not.
+
 ## What the runtime already provides
 
 `org.gnome.Platform//50` ships more than you might expect, which keeps the

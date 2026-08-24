@@ -144,6 +144,9 @@ class GTKPassWindow(Adw.ApplicationWindow):
         self._detail_request = 0
         # (backend id, name) of the entry on display, or None.
         self._shown: tuple[str, str] | None = None
+        #: The label of the most recently opened error dialog, so that a test
+        #: can read back what was rendered rather than only that one was built.
+        self._error_detail_label: Gtk.Label | None = None
         self._clipboard = ClipboardCopier(self)
         # The entry a copied secret came from, so moving off it can take the
         # copy back rather than leaving it there for the timeout to reach.
@@ -349,7 +352,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not read an entry from {backend_id}: {error}")
-            self._toast(f"Could not copy from {password_name}: {error}")
+            self._report_failure(f"Could not copy from {password_name}", error)
 
         try:
             future = self.backend_manager.get_password_async(backend_id, password_name)
@@ -875,7 +878,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
             )
         except Exception as e:
             logger.error(f"Could not adopt the store at {store}: {e}")
-            self._toast(f"Could not use {store}: {e}")
+            self._report_failure(f"Could not use {store}", e)
             return
 
         self.adopt_store_button.set_visible(False)
@@ -1043,7 +1046,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
             )
         except Exception as e:
             logger.error(f"Could not record the recipients for {backend_id}: {e}")
-            self._toast(f"Could not record the recipients: {e}")
+            self._report_failure("Could not record the recipients", e)
             return
 
         self._toast(
@@ -1131,7 +1134,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
             if isinstance(error, SyncNotPermitted):
                 self._show_sync_blocked(error)
             else:
-                self._toast(f"Could not sync: {error}")
+                self._report_failure("Could not sync", error)
             self._sync_next()
 
         try:
@@ -1218,7 +1221,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not add an entry to {backend_id}: {error}")
-            self._toast(f"Could not add {name}: {error}")
+            self._report_failure(f"Could not add {name}", error)
 
         try:
             future = self.backend_manager.add_password_async(backend_id, name, content)
@@ -1471,7 +1474,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not move a folder in {backend_id}: {error}")
-            self._toast(f"Could not move {old_path}: {error}")
+            self._report_failure(f"Could not move {old_path}", error)
 
         try:
             future = self.backend_manager.move_folder_async(
@@ -1496,7 +1499,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not move an entry in {backend_id}: {error}")
-            self._toast(f"Could not rename {old_name}: {error}")
+            self._report_failure(f"Could not rename {old_name}", error)
 
         try:
             future = self.backend_manager.move_password_async(
@@ -1562,7 +1565,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not delete an entry from {backend_id}: {error}")
-            self._toast(f"Could not delete {password_name}: {error}")
+            self._report_failure(f"Could not delete {password_name}", error)
 
         try:
             future = self.backend_manager.delete_password_async(
@@ -1588,7 +1591,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not save an entry to {backend_id}: {error}")
-            self._toast(f"Could not save {password_name}: {error}")
+            self._report_failure(f"Could not save {password_name}", error)
 
         try:
             future = self.backend_manager.edit_password_async(
@@ -1623,6 +1626,43 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
     def _toast(self, message: str) -> None:
         self.toast_overlay.add_toast(Adw.Toast.new(message))
+
+    def _report_failure(self, summary: str, error: object) -> None:
+        """Say what failed, and keep the whole of why within reach.
+
+        A toast is one line and it ellipsizes. gpg answers an encryption it
+        will not perform with two, and the second is the one that says why --
+        so a failure reported as a toast alone arrived as the beginning of a
+        sentence, which is neither actionable nor reportable.
+
+        The summary stays where it was. The rest goes behind a Details button,
+        and the toast stops timing out: an error nobody has read yet is not one
+        to take off the screen after five seconds.
+        """
+        detail = str(error).strip()
+        toast = Adw.Toast.new(summary)
+        # 0 is AdwToast for "until it is dismissed".
+        toast.set_timeout(0)
+        if detail and detail not in summary:
+            toast.set_button_label("Details")
+            toast.connect(
+                "button-clicked", lambda *_: self._show_error_detail(summary, detail)
+            )
+        self.toast_overlay.add_toast(toast)
+
+    def _show_error_detail(self, summary: str, detail: str) -> Adw.AlertDialog:
+        """The whole error, selectable, so it can be pasted into a report."""
+        builder = Gtk.Builder.new_from_file(
+            str(importlib.resources.files("gtkpass.ui.blueprints") / "error_detail.ui")
+        )
+        dialog = builder.get_object("error_detail_dialog")
+        dialog.set_body(summary)
+        # Held on the window rather than looked up again: the dialog is built
+        # per failure, and a test has to be able to read back what it rendered.
+        self._error_detail_label = builder.get_object("error_detail_label")
+        self._error_detail_label.set_label(detail)
+        dialog.present(self)
+        return dialog
 
 
 def _folders_in(entry_names: set[str]) -> set[str]:

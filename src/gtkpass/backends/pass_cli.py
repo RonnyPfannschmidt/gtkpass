@@ -29,6 +29,10 @@ from . import (
 from .git_store import GitStore
 from .recipients import audit, ensure_approved
 
+#: What pass is told to pass on to gpg, so that encrypting does not depend on
+#: ownertrust. See where it is applied in create() for the whole reason.
+GPG_TRUST_OPTION = "--trust-model=always"
+
 
 @dataclass
 class PassBackendSettings(BackendSettings):
@@ -154,6 +158,33 @@ class PassBackend(PasswordBackend):
         env = os.environ.copy()
         if settings.password_store_dir:
             env["PASSWORD_STORE_DIR"] = str(settings.password_store_dir)
+
+        # Encrypting must not depend on ownertrust. A store's .gpg-id names who
+        # it is for, and whether those keys have been signed is a different
+        # question that gpg refuses to encrypt without an answer to:
+        #
+        #   gpg: <key>: There is no assurance this key belongs to the named user
+        #   gpg: [stdin]: encryption failed: Unusable public key
+        #
+        # Which is what the Flatpak did on every add and every edit. The
+        # sandbox is granted the public keyring and nothing else, so gpg found
+        # no trustdb, built an empty one, and every recipient in it was
+        # unknown. DirectBackend has passed always_trust since it was written,
+        # so this is pass being brought into line rather than a new decision --
+        # two backends over one store must not disagree about whether it can be
+        # written to. Which recipients are legitimate is asked and answered in
+        # backends/recipients.py, which refuses the write outright when .gpg-id
+        # has changed without review.
+        #
+        # Appended rather than assigned: this variable belongs to the user
+        # first, and overwriting it would drop a cipher preference or a
+        # --no-encrypt-to they had set. A trust model they chose themselves
+        # wins outright, because two of them on one command line contradict.
+        options = env.get("PASSWORD_STORE_GPG_OPTS", "")
+        if "--trust-model" not in options:
+            env["PASSWORD_STORE_GPG_OPTS"] = (
+                f"{options} {GPG_TRUST_OPTION}".strip() if options else GPG_TRUST_OPTION
+            )
 
         return cls(
             pass_cmd=pass_cmd,

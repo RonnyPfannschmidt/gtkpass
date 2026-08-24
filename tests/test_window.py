@@ -121,6 +121,24 @@ def sidebar_names(window):
     return list(walk(window.password_list.root))
 
 
+def captured_messages(window) -> list[str]:
+    """Everything the window says to the user, by whichever route.
+
+    Successes go through ``_toast``. Failures go through ``_report_failure``,
+    which keeps the summary in the toast and puts the reason behind a Details
+    button -- because a toast is one line and gpg's refusals are two, so the
+    line that says why used to be the one that got cropped.
+
+    A test asking "was this reported" means either, so this captures both and
+    joins a failure back into one string. Which route a failure took is pinned
+    separately, in TestAFailureCanBeRead.
+    """
+    said: list[str] = []
+    window._toast = said.append
+    window._report_failure = lambda summary, error: said.append(f"{summary}: {error}")
+    return said
+
+
 def displayed_name(window):
     """The entry the detail pane is showing, read back off its heading.
 
@@ -1241,8 +1259,7 @@ class TestEditing:
         if backend_edit is not None:
             backend.edit_password = backend_edit  # type: ignore[method-assign]
 
-        toasts: list[str] = []
-        window._toast = toasts.append  # type: ignore[method-assign,assignment]
+        toasts = captured_messages(window)
 
         name = backend.list_passwords()[0].name
         window._on_password_selected(DEMO_BACKEND_ID, name)
@@ -1479,8 +1496,7 @@ class TestAdding:
                 raise BackendError("the store is on fire")
 
             backend.add_password = refuse
-            toasts: list[str] = []
-            window._toast = toasts.append
+            toasts = captured_messages(window)
 
             dialog = window._open_add_dialog()
             dialog.name_row.set_text("new/entry")
@@ -1659,8 +1675,7 @@ class TestDeleting:
                 raise BackendError("the store is read-only after all")
 
             backend.delete_password = refuse
-            toasts: list[str] = []
-            window._toast = toasts.append
+            toasts = captured_messages(window)
             self.open_entry(window)
 
             window._confirm_delete().emit("response", "delete")
@@ -1848,8 +1863,7 @@ class TestRenamingAnEntry:
                 raise BackendError("the recipients changed under it")
 
             backend.move_password = refuse
-            toasts: list[str] = []
-            window._toast = toasts.append
+            toasts = captured_messages(window)
             self.open_entry(window)
 
             dialog = window._open_rename_dialog()
@@ -2040,8 +2054,7 @@ class TestRenamingAFolder:
                 raise BackendError("something under it would be clobbered")
 
             backend.move_folder = refuse
-            toasts: list[str] = []
-            window._toast = toasts.append
+            toasts = captured_messages(window)
             self.select_folder(window)
 
             dialog = window._open_rename_dialog()
@@ -2272,8 +2285,7 @@ class TestRotating:
             window = self.rotatable_window(app)
             self.open_entry(window)
             window.password_detail.entry.content = None
-            toasts: list[str] = []
-            window._toast = toasts.append
+            toasts = captured_messages(window)
 
             return window._open_rotate_dialog(), toasts
 
@@ -2281,6 +2293,111 @@ class TestRotating:
 
         assert dialog is None
         assert toasts
+
+
+class TestAFailureCanBeRead:
+    """A toast is one line, and it ellipsizes.
+
+    Reported from the Flatpak: adding a password failed and the message was
+    cropped, so there was nothing to act on and nothing to report. What gpg had
+    actually said was two lines, and the second was the one that said why.
+
+    So the summary stays in the toast, the whole of it goes behind a Details
+    button, and the toast stops timing out -- an error nobody has read yet is
+    not one to take off the screen after five seconds.
+    """
+
+    def failing_window(self, app, error):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+
+        def refuse(name, content, commit=True):
+            raise error
+
+        backend.add_password = refuse
+        return window
+
+    def toasts_from(self, window):
+        seen: list = []
+        window.toast_overlay.add_toast = seen.append
+        return seen
+
+    #: Two lines, as gpg answers an encryption it will not perform. The second
+    #: is the one worth reading, and the one a single-line toast loses.
+    GPG_REFUSAL = (
+        "gpg: 0437DE4ADC53950B: There is no assurance this key belongs to "
+        "the named user\n"
+        "gpg: [stdin]: encryption failed: Unusable public key"
+    )
+
+    def add_and_fail(self, app):
+        from gtkpass.backends import BackendError
+
+        window = self.failing_window(app, BackendError(self.GPG_REFUSAL))
+        seen = self.toasts_from(window)
+        window._add_entry(DEMO_BACKEND_ID, "email/new", "s3cret\n")
+        pump_until(lambda: bool(seen), timeout_seconds=5.0)
+        return window, seen
+
+    def test_the_summary_still_names_what_failed(self, demo_backend_configured):
+        def ask(app):
+            _, seen = self.add_and_fail(app)
+            return seen[0].get_title()
+
+        assert "email/new" in run_in_application(ask)
+
+    def test_the_toast_offers_the_rest_of_it(self, demo_backend_configured):
+        def ask(app):
+            _, seen = self.add_and_fail(app)
+            return seen[0].get_button_label()
+
+        assert run_in_application(ask) == "Details"
+
+    def test_an_unread_error_is_not_taken_off_the_screen(self, demo_backend_configured):
+        """Zero is AdwToast for "stay until it is dismissed"."""
+
+        def ask(app):
+            _, seen = self.add_and_fail(app)
+            return seen[0].get_timeout()
+
+        assert run_in_application(ask) == 0
+
+    def test_the_details_button_shows_the_whole_error(self, demo_backend_configured):
+        def ask(app):
+            window, seen = self.add_and_fail(app)
+            seen[0].emit("button-clicked")
+            return window._error_detail_label.get_label()
+
+        shown = run_in_application(ask)
+
+        assert shown == self.GPG_REFUSAL
+        assert "Unusable public key" in shown, "the line that says why is missing"
+
+    def test_the_error_can_be_selected_to_be_pasted_into_a_report(
+        self, demo_backend_configured
+    ):
+        def ask(app):
+            window, seen = self.add_and_fail(app)
+            seen[0].emit("button-clicked")
+            return window._error_detail_label.get_selectable()
+
+        assert run_in_application(ask) is True
+
+    def test_a_success_is_still_an_ordinary_toast(self, demo_backend_configured):
+        """Only failures grow a button; a confirmation has nothing behind it."""
+
+        def ask(app):
+            window = listed_window(app)
+            seen = self.toasts_from(window)
+            window._toast("Added email/new")
+            return seen[0].get_button_label(), seen[0].get_timeout()
+
+        label, timeout = run_in_application(ask)
+
+        assert label is None
+        assert timeout != 0
 
 
 class TestACopiedSecretIsTakenBack:
@@ -2557,8 +2674,7 @@ class TestSyncing:
             window = self.window_with_sync(
                 app, self.ready(), sync=lambda: SyncResult(pulled=2, pushed=1)
             )
-            toasts: list[str] = []
-            window._toast = toasts.append  # type: ignore[method-assign,assignment]
+            toasts = captured_messages(window)
 
             window.lookup_action("sync").activate(None)
             pump_until(lambda: bool(toasts), timeout_seconds=5.0)
@@ -2576,8 +2692,7 @@ class TestSyncing:
             window = self.window_with_sync(
                 app, self.ready(), sync=lambda: SyncResult(pulled=0, pushed=0)
             )
-            toasts: list[str] = []
-            window._toast = toasts.append  # type: ignore[method-assign,assignment]
+            toasts = captured_messages(window)
 
             window.lookup_action("sync").activate(None)
             pump_until(lambda: bool(toasts), timeout_seconds=5.0)
@@ -2595,8 +2710,7 @@ class TestSyncing:
 
         def check(app):
             window = self.window_with_sync(app, self.ready(), sync=failing)
-            toasts: list[str] = []
-            window._toast = toasts.append  # type: ignore[method-assign,assignment]
+            toasts = captured_messages(window)
 
             window.lookup_action("sync").activate(None)
             pump_until(lambda: bool(toasts), timeout_seconds=5.0)
