@@ -76,7 +76,18 @@ _WORDLIST = "eff_large_wordlist.txt"
 
 
 def _load_words() -> tuple[str, ...]:
-    """Read the wordlist, dropping the attribution header at the top of it.
+    """Read the wordlist, dropping the header and any word the separator splits.
+
+    The EFF list has four hyphenated entries -- drop-down, felt-tip, t-shirt,
+    yo-yo -- and the separator between words is a hyphen. Left in, a passphrase
+    reading ``drop-down-anchor-zoom`` is three words that look like four: nobody
+    reading it back can tell where the words are, and anything that splits on
+    the separator to count them is wrong.
+
+    So they are excluded here rather than removed from the file, which stays
+    the published list byte for byte and can still be diffed against it. The
+    cost is 7772 words instead of 7776, which is 0.0007 of a bit each -- against
+    a passphrase somebody can actually read out.
 
     A tuple rather than a list: nothing may add a word to the vocabulary after
     the fact, and ``secrets.choice`` is happy with either.
@@ -86,14 +97,16 @@ def _load_words() -> tuple[str, ...]:
         .joinpath(_WORDLIST)
         .read_text(encoding="utf-8")
     )
-    return tuple(
+    words = (
         line.strip()
         for line in text.splitlines()
         if line.strip() and not line.startswith("#")
     )
+    return tuple(word for word in words if DEFAULT_SEPARATOR not in word)
 
 
-#: The vocabulary a passphrase is drawn from: the EFF large list, 7776 words.
+#: The vocabulary a passphrase is drawn from: the EFF large list, less the four
+#: entries that contain the separator. See _load_words.
 #:
 #: Read at import rather than on first use. It is sixty kilobytes and one pass
 #: over it, which is not worth the lazy accessor it would take to avoid, and

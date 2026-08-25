@@ -160,4 +160,5 @@ MPL-2.0. See [LICENSE](LICENSE).
 - The [EFF long wordlist](https://www.eff.org/dice), which the passphrase
   generator draws from. Copyright Electronic Frontier Foundation, used under
   [CC BY 3.0 US](https://creativecommons.org/licenses/by/3.0/us/); shipped
-  verbatim as `src/gtkpass/utils/data/eff_large_wordlist.txt`
+  verbatim as `src/gtkpass/utils/data/eff_large_wordlist.txt`, less the four
+  hyphenated entries, which the hyphen separator would split

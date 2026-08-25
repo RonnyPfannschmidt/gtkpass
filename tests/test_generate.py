@@ -69,18 +69,53 @@ class TestUnpredictability:
 
 
 class TestTheWordlist:
-    """Diceware needs a list, and this one is the EFF large list verbatim.
+    """Diceware needs a list, and the file is the EFF large list verbatim.
 
-    Verbatim matters: the whole value of a published wordlist is that somebody
-    can check the copy against the original. A list quietly tidied -- the four
-    hyphenated entries removed, say -- would still be 7776 lines and would no
-    longer be the thing it says it is.
+    Verbatim matters in the file: the whole value of a published wordlist is
+    that somebody can check the copy against the original, and a list quietly
+    tidied would still be 7776 lines and would no longer be the thing it says
+    it is. So the tidying happens on the way in, and is asserted here from both
+    ends -- the file has what EFF published, the vocabulary has what is usable.
     """
 
-    def test_it_is_the_size_five_dice_give(self):
+    def test_the_file_is_the_size_five_dice_give(self):
+        """What EFF published, unaltered, so a diff against theirs is empty."""
+        import importlib.resources
+
+        from gtkpass.utils.generate import _WORDLIST
+
+        text = (
+            importlib.resources.files("gtkpass.utils.data")
+            .joinpath(_WORDLIST)
+            .read_text(encoding="utf-8")
+        )
+        lines = [
+            line
+            for line in text.splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+
+        assert len(lines) == 6**5
+
+    def test_no_word_can_be_split_by_the_separator(self):
+        """The invariant. A separator that occurs inside a word is not one.
+
+        EFF's list has four hyphenated entries and the separator is a hyphen,
+        so ``drop-down-anchor-zoom`` is three words that read as four -- nobody
+        can tell where the words are, and anything counting them by splitting
+        is wrong. Caught as a one-in-five flake in the test below, which is a
+        generous way to find out.
+        """
+        from gtkpass.utils.generate import DEFAULT_SEPARATOR, WORDS
+
+        offenders = [word for word in WORDS if DEFAULT_SEPARATOR in word]
+
+        assert offenders == []
+
+    def test_it_is_the_published_list_less_only_those(self):
         from gtkpass.utils.generate import WORDS
 
-        assert len(WORDS) == 6**5
+        assert len(WORDS) == 6**5 - 4
 
     def test_no_word_appears_twice(self):
         from gtkpass.utils.generate import WORDS
@@ -156,7 +191,7 @@ class TestPassphrases:
         figure beside it claims -- and the interface shows that figure.
         """
         import gtkpass.utils.generate as module
-        from gtkpass.utils.generate import generate_passphrase
+        from gtkpass.utils.generate import WORDS, generate_passphrase
 
         seen = []
 
@@ -168,7 +203,7 @@ class TestPassphrases:
 
         generate_passphrase(words=4)
 
-        assert seen == [6**5] * 4
+        assert seen == [len(WORDS)] * 4
 
 
 class TestDigits:
@@ -259,14 +294,23 @@ class TestEntropy:
     it: it would talk somebody out of the stronger of the two.
     """
 
-    def test_a_passphrase_is_five_dice_per_word(self):
+    def test_a_passphrase_counts_the_vocabulary_it_draws_from(self):
+        """The list as used, not as published: four entries are excluded for
+        containing the separator, and claiming their entropy would overstate
+        it."""
         import math
 
-        from gtkpass.utils.generate import Recipe, Scheme
+        from gtkpass.utils.generate import WORDS, Recipe, Scheme
 
-        expected = 6 * math.log2(6**5)
+        expected = 6 * math.log2(len(WORDS))
 
         assert Recipe(Scheme.PASSPHRASE, size=6).entropy_bits == pytest.approx(expected)
+
+    def test_a_passphrase_is_still_worth_about_seventy_seven_bits(self):
+        """Which is the number the EFF list was chosen against."""
+        from gtkpass.utils.generate import Recipe, Scheme
+
+        assert 77 < Recipe(Scheme.PASSPHRASE, size=6).entropy_bits < 78
 
     def test_a_character_password_counts_its_alphabet(self):
         import math

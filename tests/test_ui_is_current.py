@@ -46,12 +46,24 @@ def find_compiler() -> str | None:
 
 COMPILER = find_compiler()
 
-#: Whether this is a checkout with a development environment in it -- the one
-#: place these checks are expected to run. An installed wheel or RPM has no
-#: .blp files to compile and no compiler to compile them with.
+#: Whether this is a checkout with .blp files in it. An installed wheel or RPM
+#: has none, and runs this same suite with a different interpreter.
 IN_A_CHECKOUT = BLUEPRINTS.is_dir() and (ROOT / "pyproject.toml").is_file()
 
-pytestmark = pytest.mark.skipif(
+#: Whether the interpreter running this is the development environment, which
+#: is the one that has blueprint-compiler installed. `make test-wheel` and the
+#: RPM job run the suite out of this same checkout under a different
+#: interpreter, so "there are .blp files here" does not answer this.
+IN_THE_DEV_ENVIRONMENT = Path(sys.executable).is_relative_to(ROOT / ".venv")
+
+#: Applied to the classes below rather than as a module-level ``pytestmark``,
+#: and that is the whole point of it being spelled out here.
+#:
+#: A module-level mark applies to *every* test in the file, the guard at the
+#: bottom included -- so the check written to notice that the rest had all
+#: skipped skipped along with them, and reported it as a pass. Which is the
+#: same fault this file exists to catch, one level up.
+needs_the_compiler = pytest.mark.skipif(
     COMPILER is None or not IN_A_CHECKOUT,
     reason="no blueprint-compiler, or no source tree to check",
 )
@@ -92,6 +104,7 @@ def blueprint_names() -> list[str]:
     return sorted(source.stem for source in BLUEPRINTS.glob("*.blp"))
 
 
+@needs_the_compiler
 class TestEveryUiFileIsCurrent:
     def test_there_is_something_to_check(self):
         """Every assertion below passes vacuously if this finds nothing."""
@@ -117,6 +130,7 @@ class TestEveryUiFileIsCurrent:
         assert committed == set(blueprint_names())
 
 
+@needs_the_compiler
 class TestTheCheckWouldNotice:
     """A comparison that cannot fail is worse than none: it reads as coverage.
 
@@ -141,6 +155,7 @@ class TestTheCheckWouldNotice:
         assert filecmp.cmp(same, freshly_compiled / f"{name}.ui", shallow=False)
 
 
+@needs_the_compiler
 def test_the_compiler_is_the_one_the_makefile_uses():
     """`make ui` runs it through uv; this runs whatever is on PATH.
 
@@ -169,16 +184,21 @@ def test_the_compiler_is_the_one_the_makefile_uses():
 
 
 @pytest.mark.skipif(
-    not IN_A_CHECKOUT, reason="an installed package has no blueprints to check"
+    not IN_THE_DEV_ENVIRONMENT,
+    reason="only the development environment is expected to have the compiler",
 )
 def test_the_checks_above_are_not_all_skipping():
     """A whole file that skips looks identical to a whole file that passes.
 
-    This is the one check in here that a source checkout may not skip, and it
-    exists because the first version of this file skipped all of itself: the
-    suite runs as `.venv/bin/python -m pytest`, so `.venv/bin` is not on PATH,
-    so shutil.which found nothing, so every comparison above was silently not
-    made.
+    Deliberately outside ``needs_the_compiler``: a check that skips whenever
+    the compiler is missing cannot report that the compiler is missing. The
+    first two versions of this file both got that wrong -- one found no
+    compiler and skipped everything silently, and the one written to catch that
+    was marked alongside the rest and skipped with them.
+
+    So the condition here is the interpreter, not the compiler. The
+    development environment has blueprint-compiler as a dev dependency; if this
+    is running under it and none was found, the checks above did not run.
     """
     assert COMPILER is not None, (
         "blueprint-compiler was not found, so nothing above this line ran. "

@@ -9,10 +9,14 @@
 #
 # The dice columns are stripped and nothing else is: 7776 words, unchanged and
 # in the same order, so this file diffs against the original by cutting the
-# first column off it. Four entries are hyphenated -- drop-down, felt-tip,
-# t-shirt, yo-yo -- which is how EFF wrote them, and removing them to tidy the
-# alphabet would make this a different list that only looked like the one it
-# names.
+# first column off it.
+#
+# Four entries are hyphenated -- drop-down, felt-tip, t-shirt, yo-yo -- which is
+# how EFF wrote them. They stay here and are excluded on the way in, because the
+# separator between generated words is also a hyphen and a passphrase reading
+# "drop-down-anchor-zoom" is three words that look like four. Removing them from
+# this file instead would make it a different list that only looked like the one
+# it names; see _load_words in generate.py.
 #
 # Lines beginning with # are this header. Everything else is a word.
 abacus
