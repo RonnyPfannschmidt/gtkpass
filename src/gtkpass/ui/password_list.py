@@ -11,6 +11,7 @@ that selection reads back; the view only renders them.
 
 import importlib.resources
 from collections.abc import Callable
+from typing import ClassVar
 
 from gtkpass._gi import Gdk, Gio, GObject, Graphene, Gtk
 
@@ -155,6 +156,17 @@ class PasswordTreeView(Gtk.ScrolledWindow):
     """
 
     __gtype_name__ = "PasswordTreeView"
+
+    __gsignals__: ClassVar[dict] = {
+        # Any row at all, including a folder and a backend heading.
+        #
+        # Distinct from the password-selected callback, which fires for an
+        # entry and stays silent for anything else because its job is "decrypt
+        # this". Which actions are on offer is a different question and a
+        # folder is an answer to it: renaming applies to one, and deleting the
+        # entry the pane still happens to hold does not.
+        "selection-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
+    }
 
     column_view: Gtk.ColumnView = Gtk.Template.Child()
 
@@ -312,6 +324,7 @@ class PasswordTreeView(Gtk.ScrolledWindow):
             # Putting the highlight back on the entry the pane is already
             # showing. Announcing it would decrypt that entry a second time.
             return
+        self.emit("selection-changed")
         selected = self.get_selected_password()
         if selected and self._on_password_selected:
             self._on_password_selected(*selected)
@@ -711,6 +724,32 @@ class PasswordTreeView(Gtk.ScrolledWindow):
         if not node.password_name:
             return None
         return (node.backend_id, node.password_name)
+
+    def get_selected_folder(self) -> tuple[str, str] | None:
+        """The folder row that is selected, if the selection is one.
+
+        Distinct from :meth:`selected_folder`, which answers "which folder is
+        the selection standing in" and so answers the empty string for a
+        backend heading and for an entry at the root of a store alike. Renaming
+        needs to know that a folder is what is selected, and neither of those
+        is one.
+
+        Returns:
+            (backend id, folder path), or None when the selection is an entry,
+            a backend heading, or nothing at all.
+        """
+        row = self.selection.get_selected_item()
+        if row is None:
+            return None
+
+        node = row.get_item()
+        if node.password_name:
+            return None
+        path = self._path_of(node)
+        if not path:
+            # A backend heading: the root of a store is not a folder in it.
+            return None
+        return (node.backend_id, path)
 
     def selected_backend(self) -> str:
         """The backend the selected row belongs to, whatever kind of row it is.

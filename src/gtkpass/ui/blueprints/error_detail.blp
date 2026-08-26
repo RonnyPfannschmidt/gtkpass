@@ -1,0 +1,47 @@
+using Gtk 4.0;
+using Adw 1;
+
+// What went wrong, in full.
+//
+// Failures used to reach the user as a toast and nothing else, and a toast is
+// one line: it ellipsizes. gpg's answer to an encryption it will not perform
+// is two lines, the second of which is the one that says why, so what arrived
+// on screen was the beginning of a sentence and no way to read the rest of it.
+// A report of "adding a password does not work" with nothing to go on is what
+// that costs.
+//
+// So the toast keeps the summary and grows a Details button, and this is what
+// the button opens. The label is selectable on purpose: the next thing
+// somebody does with an error they cannot act on is paste it into an issue.
+//
+// Adw.AlertDialog is final, so this is a builder object rather than a
+// template, as in confirm_delete.blp.
+Adw.AlertDialog error_detail_dialog {
+  heading: _("What Went Wrong");
+
+  responses [
+    close: _("Close"),
+  ]
+
+  default-response: "close";
+  close-response: "close";
+
+  extra-child: ScrolledWindow error_detail_scroller {
+    hscrollbar-policy: never;
+    propagate-natural-height: true;
+    max-content-height: 320;
+    width-request: 360;
+
+    Label error_detail_label {
+      wrap: true;
+      wrap-mode: word_char;
+      xalign: 0;
+      yalign: 0;
+      selectable: true;
+      // The text is a command's output, so it is aligned and wrapped as one.
+      styles ["monospace"]
+    }
+
+    styles ["card"]
+  };
+}

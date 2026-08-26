@@ -11,12 +11,22 @@ import pytest
 from gtkpass._gi import Adw
 from gtkpass.ui.password_detail import PasswordDetailView
 from gtkpass.ui.password_edit import PasswordEditDialog
+from gtkpass.ui.password_generator import PasswordGeneratorGroup
 from gtkpass.ui.password_list import PasswordTreeView
+from gtkpass.ui.password_rename import PasswordRenameDialog
+from gtkpass.ui.password_rotate import PasswordRotateDialog
 
 pytestmark = pytest.mark.gui
 
 #: Widgets that can be built standalone, without an application or a parent.
-STANDALONE_WIDGETS = [PasswordTreeView, PasswordDetailView, PasswordEditDialog]
+STANDALONE_WIDGETS = [
+    PasswordTreeView,
+    PasswordDetailView,
+    PasswordEditDialog,
+    PasswordRenameDialog,
+    PasswordGeneratorGroup,
+    PasswordRotateDialog,
+]
 
 
 def declared_children(widget_class):
@@ -115,4 +125,43 @@ class TestSyncButtonStack:
         assert outcome.get("child") is not None, (
             f"window.blp has no Stack page named {page_name!r}; "
             f"set_visible_child_name({page_name!r}) is a silent no-op"
+        )
+
+
+class TestTheErrorDetailDialog:
+    """A builder object rather than a template: Adw.AlertDialog is final.
+
+    So the standalone-template sweep above cannot cover it, and nothing else
+    would notice the label being renamed out from under the window -- which
+    would leave the Details button opening an empty dialog at exactly the
+    moment somebody needed to read something.
+    """
+
+    def built(self):
+        import importlib.resources
+
+        from gtkpass._gi import Gtk
+
+        return Gtk.Builder.new_from_file(
+            str(importlib.resources.files("gtkpass.ui.blueprints") / "error_detail.ui")
+        )
+
+    def test_the_dialog_is_there_under_the_name_the_window_looks_up(self):
+        assert self.built().get_object("error_detail_dialog") is not None
+
+    def test_the_label_is_there_under_the_name_the_window_fills_in(self):
+        assert self.built().get_object("error_detail_label") is not None
+
+    def test_the_error_can_be_selected_to_be_pasted_into_a_report(self):
+        assert self.built().get_object("error_detail_label").get_selectable()
+
+    def test_a_long_error_scrolls_rather_than_growing_the_dialog(self):
+        """gpg can be verbose, and a dialog taller than the screen puts its
+        Close button somewhere there is no room for it."""
+        scroller = self.built().get_object("error_detail_scroller")
+
+        assert scroller is not None
+        assert scroller.get_max_content_height() > 0
+        assert scroller.get_propagate_natural_height(), (
+            "a short error would otherwise sit in a box the height of a long one"
         )

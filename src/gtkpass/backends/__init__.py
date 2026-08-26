@@ -378,6 +378,80 @@ class PasswordBackend(ABC):
         """
         pass
 
+    def move_folder(
+        self, old_prefix: str, new_prefix: str, commit: bool = True
+    ) -> None:
+        """Move every entry under a folder, keeping their paths below it.
+
+        Deliberately not abstract. A folder is a naming convention, not a thing
+        every backend has: the keyring has no directories at all -- an item
+        called ``work/mail`` is one item whose name contains a slash -- so this
+        moves the entries one at a time, which works wherever
+        :meth:`move_password` does. A backend with a cheaper way to do it says
+        so by overriding, and `pass mv` on a directory is exactly that.
+
+        The clash check happens over the whole folder before anything moves.
+        Finding it on the way to the third entry would leave two of them
+        renamed and the folder in neither place, which is worse than refusing.
+
+        Args:
+            old_prefix: The folder's path today, without a trailing slash.
+            new_prefix: The path it is to have.
+            commit: Whether to commit to git (if enabled)
+
+        Raises:
+            FileNotFoundError: If no entry lives under ``old_prefix``.
+            FileExistsError: If any entry would land on one that is already
+                there.
+            ValueError: If the folder would be moved into itself, or onto
+                itself -- neither of which is a rename that means anything.
+        """
+        moves = self.plan_folder_move(old_prefix, new_prefix)
+        for old_name, new_name in moves:
+            self.move_password(old_name, new_name, commit)
+
+    def plan_folder_move(
+        self, old_prefix: str, new_prefix: str
+    ) -> list[tuple[str, str]]:
+        """Work out what a folder move would do, and refuse it if it cannot.
+
+        Separate from :meth:`move_folder` so that a backend overriding the move
+        still refuses the same things for the same reasons -- and so that the
+        interface can ask what a move would touch before offering it.
+
+        Returns:
+            (old name, new name) for every entry under the folder.
+
+        Raises:
+            FileNotFoundError, FileExistsError, ValueError: As move_folder.
+        """
+        old_prefix = old_prefix.strip("/")
+        new_prefix = new_prefix.strip("/")
+        if not old_prefix or not new_prefix:
+            raise ValueError("A folder move needs a folder at both ends")
+        if old_prefix == new_prefix:
+            raise ValueError(f"'{old_prefix}' is already where it is")
+        if new_prefix.startswith(f"{old_prefix}/"):
+            raise ValueError(f"'{old_prefix}' cannot be moved inside itself")
+
+        # The trailing slash is the whole of the correctness here. Matching on
+        # the bare prefix takes "workshop" along with "work", which is a rename
+        # of entries nobody was looking at.
+        held = [
+            entry.name
+            for entry in self.list_passwords(prefix=f"{old_prefix}/")
+            if entry.name.startswith(f"{old_prefix}/")
+        ]
+        if not held:
+            raise FileNotFoundError(f"No folder named '{old_prefix}'")
+
+        existing = {entry.name for entry in self.list_passwords()}
+        moves = [(name, f"{new_prefix}/{name[len(old_prefix) + 1 :]}") for name in held]
+        clashes = sorted(new for _, new in moves if new in existing)
+        if clashes:
+            raise FileExistsError(f"'{clashes[0]}' already exists")
+        return moves
+
     @abstractmethod
     def copy_password(self, source: str, dest: str, commit: bool = True) -> None:
         """Copy a password entry.

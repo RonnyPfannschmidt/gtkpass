@@ -35,7 +35,7 @@ ABSTRACT_METHODS = sorted(PasswordBackend.__abstractmethods__)
 #: Methods the ABC supplies a working default for, so they are absent from
 #: __abstractmethods__ and the signature check above would never see them.
 #: A backend may override these; if it does, it has to keep the signature.
-OPTIONAL_METHODS = ["sync", "sync_capability", "recipient_audit"]
+OPTIONAL_METHODS = ["sync", "sync_capability", "recipient_audit", "move_folder"]
 
 
 #: ``is_available()`` runs on the UI thread during window construction, so a
@@ -196,6 +196,122 @@ class TestTheInheritedDefaultRefuses:
 
         with pytest.raises(BackendError):
             backend.sync()
+
+
+class TestMovingAFolderFallsBackToMovingItsEntries:
+    """A folder is a naming convention, not a thing every backend has.
+
+    The keyring has no directories at all -- an item called ``work/mail`` is one
+    item whose name has a slash in it -- and a backend somebody ships separately
+    may have none either. So the ABC moves the entries one at a time, and a
+    backend with a cheaper way to do it says so by overriding.
+    """
+
+    class Fake(PasswordBackend):
+        """A store that is a dictionary, so the default is what is tested."""
+
+        metadata = BackendMetadata(id="fake", name="Fake", icon="x", description="x")
+
+        def __init__(self, names):
+            self.entries = dict.fromkeys(names, "s3cret\n")
+
+        @classmethod
+        def is_available(cls):
+            return True
+
+        def list_passwords(self, prefix=""):
+            from pathlib import Path
+
+            return [
+                PasswordMetadata(name=name, path=Path(name), modified=0.0)
+                for name in sorted(self.entries)
+                if name.startswith(prefix)
+            ]
+
+        def get_password(self, name):
+            raise NotImplementedError
+
+        def add_password(self, name, content, commit=True):
+            self.entries[name] = content
+
+        def edit_password(self, name, content, commit=True):
+            self.entries[name] = content
+
+        def delete_password(self, name, commit=True):
+            del self.entries[name]
+
+        def move_password(self, old_name, new_name, commit=True):
+            if old_name not in self.entries:
+                raise FileNotFoundError(old_name)
+            if new_name in self.entries:
+                raise FileExistsError(new_name)
+            self.entries[new_name] = self.entries.pop(old_name)
+
+        def copy_password(self, source, dest, commit=True):
+            self.entries[dest] = self.entries[source]
+
+        def search(self, query):
+            return []
+
+    @pytest.fixture
+    def backend(self):
+        return self.Fake(["work/mail", "work/vpn", "work/eu/tax", "personal/bank"])
+
+    def test_every_entry_under_it_moves(self, backend):
+        backend.move_folder("work", "archive/work")
+
+        assert sorted(backend.entries) == [
+            "archive/work/eu/tax",
+            "archive/work/mail",
+            "archive/work/vpn",
+            "personal/bank",
+        ]
+
+    def test_nothing_outside_it_moves(self, backend):
+        backend.move_folder("work", "archive")
+
+        assert "personal/bank" in backend.entries
+
+    def test_a_folder_whose_name_is_a_prefix_of_another_is_left_alone(self):
+        """``work`` must not take ``workshop`` with it.
+
+        The obvious implementation matches on the name rather than on the
+        path -- ``name.startswith("work")`` -- and quietly moves a sibling
+        folder whose name happens to begin the same way. Which is a rename
+        nobody asked for, of entries nobody was looking at.
+        """
+        backend = self.Fake(["work/mail", "workshop/lathe"])
+
+        backend.move_folder("work", "archive")
+
+        assert sorted(backend.entries) == ["archive/mail", "workshop/lathe"]
+
+    def test_a_folder_that_is_not_there_is_refused(self, backend):
+        with pytest.raises(FileNotFoundError):
+            backend.move_folder("absent", "somewhere")
+
+    def test_a_destination_that_would_collide_is_refused_before_anything_moves(self):
+        """Half a folder moved is worse than none of it.
+
+        The clash is found on the way to the third entry, and by then two have
+        already been renamed -- so the check happens first, over all of them.
+        """
+        backend = self.Fake(["work/mail", "work/vpn", "archive/vpn"])
+
+        with pytest.raises(FileExistsError):
+            backend.move_folder("work", "archive")
+
+        assert sorted(backend.entries) == ["archive/vpn", "work/mail", "work/vpn"]
+
+    def test_a_folder_cannot_be_moved_into_itself(self, backend):
+        """``work`` into ``work/old`` never terminates as a rename and never
+        means anything as a request."""
+        with pytest.raises(ValueError):
+            backend.move_folder("work", "work/old")
+
+    def test_moving_a_folder_onto_itself_is_refused(self, backend):
+        with pytest.raises(ValueError):
+            backend.move_folder("work", "work")
 
 
 class TestTheSerializingProxyCoversTheWholeInterface:

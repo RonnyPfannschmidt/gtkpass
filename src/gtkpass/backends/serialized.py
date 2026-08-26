@@ -98,6 +98,18 @@ class SerializedBackend(PasswordBackend):
         with self._lock:
             self._backend.move_password(old_name, new_name, commit)
 
+    def move_folder(
+        self, old_prefix: str, new_prefix: str, commit: bool = True
+    ) -> None:
+        with self._lock:
+            self._backend.move_folder(old_prefix, new_prefix, commit)
+
+    def plan_folder_move(
+        self, old_prefix: str, new_prefix: str
+    ) -> list[tuple[str, str]]:
+        with self._lock:
+            return self._backend.plan_folder_move(old_prefix, new_prefix)
+
     def copy_password(self, source: str, dest: str, commit: bool = True) -> None:
         with self._lock:
             self._backend.copy_password(source, dest, commit)

@@ -130,6 +130,14 @@ class GTKPassApp(Adw.Application):
         "app.preferences": ["<Control>comma"],
         "win.add-password": ["<Control>n"],
         "win.edit-password": ["<Control>e"],
+        # F2 is the rename key everywhere a file manager has one, and it is
+        # not a letter, so nothing being typed into wants it.
+        "win.rename-password": ["F2"],
+        # Shift+R, beside Ctrl+R for reloading. Rotating is the other thing
+        # a person means by "refresh this", and the two are next to each other
+        # in the shortcuts window so the pairing is visible rather than a
+        # coincidence somebody has to notice.
+        "win.rotate-password": ["<Control><Shift>r"],
         "win.delete-password": ["Delete"],
         "win.copy-password": ["<Control><Shift>c"],
         "win.copy-username": ["<Control><Shift>u"],

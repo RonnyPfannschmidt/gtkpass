@@ -113,6 +113,16 @@ RPM_STAMP := dist/rpm/.built
 # build-deb.sh empties dist/deb before it starts.
 DEB_STAMP := dist/deb/.built
 
+# And for the Flatpak, which leaves no artefact here at all -- it is installed
+# into the user's flatpak installation rather than into dist/. The stamp stands
+# for "this source tree is what is installed", which is what `make flatpak-run`
+# needs to know and had no way to ask.
+#
+# It records a build and not an installation, so uninstalling the Flatpak by
+# hand leaves it lying. That fails loudly on the next run, which is the
+# difference that matters: the failure it replaces was silent.
+FLATPAK_STAMP := dist/flatpak/.installed
+
 # An extension names the system it was built for and systemd refuses it
 # anywhere else, so the image for *this* machine is what these targets mean.
 OS_ID := $(shell . /etc/os-release && echo $$ID)
@@ -137,7 +147,7 @@ help:
 	@echo "devstore create a throwaway store with fake passwords"
 	@echo "run-dev  launch against the throwaway store, never the real one"
 	@echo "flatpak  build and install the Flatpak for the current user"
-	@echo "flatpak-run   run the installed Flatpak"
+	@echo "flatpak-run   build if anything changed, then run it"
 	@echo "flatpak-lint  check the manifest against Flathub's rules"
 	@echo "flatpak-lint-repo  build to a repo and run Flathub's repo checks"
 	@echo "rpm      build the RPM in a Fedora container"
@@ -290,18 +300,44 @@ run-dev: devstore $(COMPILED_SCHEMAS) $(UI_FILES)
 # The remote has to exist in the *user* installation: a system-wide flathub is
 # not visible to `--user --install-deps-from=flathub`, which fails with "No
 # remote refs found" however well configured the system one is.
-flatpak:
+flatpak: $(FLATPAK_STAMP)
+
+# The same prerequisites as the RPM, plus the manifest: what goes into the
+# Flatpak is the source tree, and the manifest decides what is done with it.
+# The .ui files are in there through PACKAGE_SOURCES, so a .blp edited without
+# `make ui` is recompiled here rather than built and installed as the previous
+# interface.
+#
+# --force-clean empties .flatpak-build, not .flatpak-builder: the module cache
+# survives, so an unchanged git, tree and pass are not built again and this
+# costs about twelve seconds.
+#
+# --delete-build-dirs because flatpak-builder removes a module's build tree on
+# success only. One interrupted build leaves it in .flatpak-builder/build and
+# nothing ever comes back for it; two had accumulated to half a gigabyte before
+# anybody looked, the older of them by months. This is not the module cache,
+# which lives beside it and is what keeps a rebuild cheap.
+$(FLATPAK_STAMP): $(PACKAGE_SOURCES) $(FLATPAK_MANIFEST)
 	flatpak remote-add --user --if-not-exists \
 		flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-	flatpak-builder --force-clean --user --install --install-deps-from=flathub \
+	flatpak-builder --force-clean --delete-build-dirs --user --install \
+		--install-deps-from=flathub \
 		.flatpak-build $(FLATPAK_MANIFEST)
+	@mkdir -p $(dir $@)
+	@touch $@
 
 # --no-documents-portal because this application opens no file chooser and
 # exports no document, so the portal is other applications' files mounted into
 # a password manager for nothing -- and one more thing whose absence stops it
 # launching. It has to be passed per run: no manifest or override option
 # expresses it, and X-Flatpak-RunOptions in the desktop file does not either.
-flatpak-run:
+#
+# Built first, and that is not a convenience. Running whatever was installed
+# last is a quiet wrong answer: you change something, run this, and are looking
+# at the previous build while believing you are looking at your change -- so
+# the command that fails to reproduce a bug also fails to reproduce a fix, with
+# nothing on screen to say which build is on screen.
+flatpak-run: $(FLATPAK_STAMP)
 	flatpak run --no-documents-portal $(FLATPAK_ID) $(ARGS)
 
 # Flathub runs these on submission; they catch permission and metadata problems
@@ -318,7 +354,7 @@ flatpak-lint:
 		$(FLATPAK_MANIFEST)
 
 flatpak-lint-repo:
-	flatpak-builder --force-clean --user --repo=.flatpak-repo \
+	flatpak-builder --force-clean --delete-build-dirs --user --repo=.flatpak-repo \
 		.flatpak-build $(FLATPAK_MANIFEST)
 	flatpak run --no-documents-portal \
 		--command=flatpak-builder-lint org.flatpak.Builder repo \

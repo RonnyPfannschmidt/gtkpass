@@ -121,6 +121,24 @@ def sidebar_names(window):
     return list(walk(window.password_list.root))
 
 
+def captured_messages(window) -> list[str]:
+    """Everything the window says to the user, by whichever route.
+
+    Successes go through ``_toast``. Failures go through ``_report_failure``,
+    which keeps the summary in the toast and puts the reason behind a Details
+    button -- because a toast is one line and gpg's refusals are two, so the
+    line that says why used to be the one that got cropped.
+
+    A test asking "was this reported" means either, so this captures both and
+    joins a failure back into one string. Which route a failure took is pinned
+    separately, in TestAFailureCanBeRead.
+    """
+    said: list[str] = []
+    window._toast = said.append
+    window._report_failure = lambda summary, error: said.append(f"{summary}: {error}")
+    return said
+
+
 def displayed_name(window):
     """The entry the detail pane is showing, read back off its heading.
 
@@ -1241,8 +1259,7 @@ class TestEditing:
         if backend_edit is not None:
             backend.edit_password = backend_edit  # type: ignore[method-assign]
 
-        toasts: list[str] = []
-        window._toast = toasts.append  # type: ignore[method-assign,assignment]
+        toasts = captured_messages(window)
 
         name = backend.list_passwords()[0].name
         window._on_password_selected(DEMO_BACKEND_ID, name)
@@ -1479,8 +1496,7 @@ class TestAdding:
                 raise BackendError("the store is on fire")
 
             backend.add_password = refuse
-            toasts: list[str] = []
-            window._toast = toasts.append
+            toasts = captured_messages(window)
 
             dialog = window._open_add_dialog()
             dialog.name_row.set_text("new/entry")
@@ -1520,8 +1536,8 @@ class TestAdding:
         def generate(app):
             window = self.writable_window(app)
             dialog = window._open_add_dialog()
-            dialog.length_row.set_value(24)
-            dialog.generate_button.emit("clicked")
+            dialog.generator.size_row.set_value(24)
+            dialog.generator.generate_button.emit("clicked")
             return dialog.password_row.get_text()
 
         generated = run_in_application(generate)
@@ -1536,7 +1552,7 @@ class TestAdding:
         def generate(app):
             window = self.writable_window(app)
             dialog = window._open_add_dialog()
-            dialog.generate_button.emit("clicked")
+            dialog.generator.generate_button.emit("clicked")
             return dialog.password_row.get_delegate().get_visibility()
 
         assert run_in_application(generate) is True
@@ -1659,8 +1675,7 @@ class TestDeleting:
                 raise BackendError("the store is read-only after all")
 
             backend.delete_password = refuse
-            toasts: list[str] = []
-            window._toast = toasts.append
+            toasts = captured_messages(window)
             self.open_entry(window)
 
             window._confirm_delete().emit("response", "delete")
@@ -1670,6 +1685,719 @@ class TestDeleting:
         toasts = run_in_application(ask)
 
         assert toasts and "read-only after all" in toasts[0]
+
+
+class TestRenamingAnEntry:
+    """Renaming and moving are one operation, and it is not a delete.
+
+    The backends have had ``move_password`` all along -- `pass mv`, which
+    re-encrypts across a .gpg-id boundary -- and nothing in the interface
+    reached it, so the only way to move an entry was to add it again somewhere
+    else and delete the original, which is two writes and a window in which the
+    secret exists twice.
+    """
+
+    def renamable_window(self, app):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+        return window
+
+    def open_entry(self, window):
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        name = backend.list_passwords()[0].name
+        window._on_password_selected(DEMO_BACKEND_ID, name)
+        pump_until(
+            lambda: window.password_detail.stack.get_visible_child_name() == "content"
+        )
+        return name
+
+    @staticmethod
+    def rename_in_place(backend, old_name: str, new_name: str) -> None:
+        """Move an entry inside the demo backend, which cannot do it itself.
+
+        Through ``wrapped``: what the manager hands out is a SerializedBackend,
+        and the demo data belongs to the backend it stands for.
+        """
+        demo = backend.wrapped
+        for item in demo._data:
+            if item["name"] == old_name:
+                item["name"] = new_name
+        demo._entries_cache[new_name] = demo._entries_cache.pop(old_name)
+        demo._entries_cache[new_name].name = new_name
+
+    def test_nothing_is_offered_before_an_entry_is_open(self, demo_backend_configured):
+        def enabled(app):
+            return self.renamable_window(app).lookup_action("rename-password")
+
+        assert run_in_application(enabled).get_enabled() is False
+
+    def test_an_open_entry_can_be_renamed(self, demo_backend_configured):
+        def enabled(app):
+            window = self.renamable_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is True
+
+    def test_a_read_only_store_offers_nothing(self, demo_backend_configured):
+        """The demo store raises on every write; do not offer a dialog for it."""
+
+        def enabled(app):
+            window = listed_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is False
+
+    def test_the_dialog_starts_at_the_name_it_has(self, demo_backend_configured):
+        def ask(app):
+            window = self.renamable_window(app)
+            name = self.open_entry(window)
+            dialog = window._open_rename_dialog()
+            return name, dialog.name_row.get_text()
+
+        name, offered = run_in_application(ask)
+
+        assert offered == name
+
+    def test_the_store_the_entry_stays_in_is_named(self, demo_backend_configured):
+        def ask(app):
+            window = self.renamable_window(app)
+            self.open_entry(window)
+            return window._open_rename_dialog().store_row.get_subtitle()
+
+        assert run_in_application(ask)
+
+    def test_the_names_already_there_are_offered_as_clashes(
+        self, demo_backend_configured
+    ):
+        """Otherwise the clash is a FileExistsError after the round trip."""
+
+        def ask(app):
+            window = self.renamable_window(app)
+            self.open_entry(window)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            other = backend.list_passwords()[1].name
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text(other)
+            return dialog.name_row.has_css_class("error")
+
+        assert run_in_application(ask) is True
+
+    def test_renaming_asks_the_backend_to_move_it(self, demo_backend_configured):
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: moved.append(
+                (old, new)
+            )
+            name = self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/2019/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(moved), timeout_seconds=5.0)
+            return name
+
+        name = run_in_application(ask)
+
+        assert moved == [(name, "archive/2019/moved")]
+
+    def test_the_pane_follows_the_entry_to_its_new_name(self, demo_backend_configured):
+        """What was on display still exists; it is just called something else.
+
+        The stub really moves the entry in the demo backend's data rather than
+        doing nothing: what is under test is that the pane goes looking for it
+        under the new name, and a pane left pointing at an entry that was never
+        there would pass a test whose stub was a no-op.
+        """
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: self.rename_in_place(
+                backend, old, new
+            )
+            self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(
+                lambda: window._shown == (DEMO_BACKEND_ID, "archive/moved"),
+                timeout_seconds=5.0,
+            )
+            return window._shown
+
+        assert run_in_application(ask) == (DEMO_BACKEND_ID, "archive/moved")
+
+    def test_cancelling_moves_nothing(self, demo_backend_configured):
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: moved.append(new)
+            self.open_entry(window)
+
+            window._open_rename_dialog().cancel_button.emit("clicked")
+            pump_until(lambda: False, timeout_seconds=0.2)
+
+        run_in_application(ask)
+
+        assert moved == []
+
+    def test_a_failed_move_is_reported(self, demo_backend_configured):
+        from gtkpass.backends import BackendError
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+
+            def refuse(old, new, commit=True):
+                raise BackendError("the recipients changed under it")
+
+            backend.move_password = refuse
+            toasts = captured_messages(window)
+            self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(toasts), timeout_seconds=5.0)
+            return toasts
+
+        toasts = run_in_application(ask)
+
+        assert toasts and "recipients changed under it" in toasts[0]
+
+    def test_the_sidebar_is_listed_again_after_a_move(self, demo_backend_configured):
+        """A move empties the folder it left and makes the one it went to.
+
+        Inserting a row here would leave both wrong, so the store is asked
+        again -- the same thing an add and a delete do.
+        """
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_password = lambda old, new, commit=True: None
+            listed: list[int] = []
+            original_load = window._load_passwords
+
+            def counted(*args, **kwargs):
+                listed.append(1)
+                return original_load(*args, **kwargs)
+
+            window._load_passwords = counted
+            self.open_entry(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(listed), timeout_seconds=5.0)
+            return listed
+
+        assert run_in_application(ask)
+
+
+class TestRenamingAFolder:
+    """Moving a folder was renaming every entry under it, one at a time.
+
+    The sidebar shows folders and nothing could act on one, which is the same
+    gap the ROADMAP described from the delete side: an emptied folder that
+    lingers is a folder the interface has no operation for.
+    """
+
+    def renamable_window(self, app):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+        return window
+
+    def select_folder(self, window):
+        """Stand on the first folder row the demo store has."""
+        window.password_list.expand_all()
+        for index in range(window.password_list.tree_model.get_n_items()):
+            node = window.password_list.tree_model.get_row(index).get_item()
+            if not node.password_name and window.password_list._path_of(node):
+                window.password_list.selection.set_selected(index)
+                return window.password_list._path_of(node)
+        raise AssertionError("the demo store has no folders")
+
+    def test_a_selected_folder_can_be_renamed(self, demo_backend_configured):
+        def enabled(app):
+            window = self.renamable_window(app)
+            self.select_folder(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is True
+
+    def test_a_read_only_store_offers_nothing(self, demo_backend_configured):
+        def enabled(app):
+            window = listed_window(app)
+            self.select_folder(window)
+            return window.lookup_action("rename-password").get_enabled()
+
+        assert run_in_application(enabled) is False
+
+    def test_the_dialog_starts_at_the_path_it_has(self, demo_backend_configured):
+        def ask(app):
+            window = self.renamable_window(app)
+            folder = self.select_folder(window)
+            dialog = window._open_rename_dialog()
+            return folder, dialog.name_row.get_text(), dialog.get_title()
+
+        folder, offered, title = run_in_application(ask)
+
+        assert offered == folder
+        assert "Folder" in title
+
+    def test_renaming_asks_the_backend_to_move_the_folder(
+        self, demo_backend_configured
+    ):
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_folder = lambda old, new, commit=True: moved.append((old, new))
+            folder = self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(moved), timeout_seconds=5.0)
+            return folder
+
+        folder = run_in_application(ask)
+
+        assert moved == [(folder, "archive/moved")]
+
+    def test_an_open_entry_does_not_shadow_the_selected_folder(
+        self, demo_backend_configured
+    ):
+        """Right-clicking a folder selects it, and the menu acts on what was
+        clicked -- not on whatever the pane happens to still be showing."""
+        moved = []
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_folder = lambda old, new, commit=True: moved.append("folder")
+            backend.move_password = lambda old, new, commit=True: moved.append("entry")
+            window._on_password_selected(
+                DEMO_BACKEND_ID, backend.list_passwords()[0].name
+            )
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(moved), timeout_seconds=5.0)
+
+        run_in_application(ask)
+
+        assert moved == ["folder"]
+
+    @pytest.mark.parametrize(
+        "action_name", ["edit-password", "delete-password", "rotate-password"]
+    )
+    def test_the_entry_actions_go_away_while_a_folder_is_selected(
+        self, demo_backend_configured, action_name
+    ):
+        """Otherwise one menu acts on two different things.
+
+        Right-clicking a folder selects it and opens the menu over it. If Rename
+        moves that folder while Delete removes whatever the pane still happens
+        to be showing, the menu is a trap -- and the entry it would delete is
+        not even on screen.
+        """
+
+        def enabled(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            window._on_password_selected(
+                DEMO_BACKEND_ID, backend.list_passwords()[0].name
+            )
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            before = window.lookup_action(action_name).get_enabled()
+            self.select_folder(window)
+            return before, window.lookup_action(action_name).get_enabled()
+
+        before, after = run_in_application(enabled)
+
+        assert before is True, "the test proves nothing if it was already off"
+        assert after is False
+
+    def test_a_failed_folder_move_is_reported(self, demo_backend_configured):
+        from gtkpass.backends import BackendError
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+
+            def refuse(old, new, commit=True):
+                raise BackendError("something under it would be clobbered")
+
+            backend.move_folder = refuse
+            toasts = captured_messages(window)
+            self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: bool(toasts), timeout_seconds=5.0)
+            return toasts
+
+        toasts = run_in_application(ask)
+
+        assert toasts and "would be clobbered" in toasts[0]
+
+    def test_the_pane_lets_go_of_an_entry_that_was_under_it(
+        self, demo_backend_configured
+    ):
+        """What was on display is now at a path this window does not know.
+
+        Following it would mean working out its new name, which is the folder
+        move done twice -- so the pane is cleared and the sidebar re-listed.
+        """
+
+        def ask(app):
+            window = self.renamable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.move_folder = lambda old, new, commit=True: None
+            nested = next(
+                entry.name for entry in backend.list_passwords() if "/" in entry.name
+            )
+            window._on_password_selected(DEMO_BACKEND_ID, nested)
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            self.select_folder(window)
+
+            dialog = window._open_rename_dialog()
+            dialog.name_row.set_text("archive/moved")
+            dialog.rename_button.emit("clicked")
+            pump_until(lambda: window._shown is None, timeout_seconds=5.0)
+            return window._shown
+
+        assert run_in_application(ask) is None
+
+
+class TestRotating:
+    """Rotating puts the store last, which is the whole reason it exists.
+
+    Through the editor the write lands first and the site second, so a site
+    that refuses the new password leaves the store holding one that does not
+    work. The wizard writes only after somebody says the change took.
+    """
+
+    def rotatable_window(self, app):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+        return window
+
+    def open_entry(self, window):
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        name = backend.list_passwords()[0].name
+        window._on_password_selected(DEMO_BACKEND_ID, name)
+        pump_until(
+            lambda: window.password_detail.stack.get_visible_child_name() == "content"
+        )
+        return name
+
+    def test_nothing_is_offered_before_an_entry_is_open(self, demo_backend_configured):
+        def enabled(app):
+            return self.rotatable_window(app).lookup_action("rotate-password")
+
+        assert run_in_application(enabled).get_enabled() is False
+
+    def test_an_open_entry_can_be_rotated(self, demo_backend_configured):
+        def enabled(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rotate-password").get_enabled()
+
+        assert run_in_application(enabled) is True
+
+    def test_a_read_only_store_offers_nothing(self, demo_backend_configured):
+        def enabled(app):
+            window = listed_window(app)
+            self.open_entry(window)
+            return window.lookup_action("rotate-password").get_enabled()
+
+        assert run_in_application(enabled) is False
+
+    def test_the_wizard_opens_on_the_entry_on_display(self, demo_backend_configured):
+        def ask(app):
+            window = self.rotatable_window(app)
+            name = self.open_entry(window)
+            dialog = window._open_rotate_dialog()
+            return name, dialog.entry_row.get_title()
+
+        name, shown = run_in_application(ask)
+
+        assert shown == name
+
+    def test_it_arrives_with_a_replacement_already_made(self, demo_backend_configured):
+        def ask(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            dialog = window._open_rotate_dialog()
+            return dialog.new_row.get_text(), dialog.current_row.get_text()
+
+        new, current = run_in_application(ask)
+
+        assert new
+        assert new != current
+
+    def test_getting_to_the_end_writes_the_new_password(self, demo_backend_configured):
+        saved = []
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.edit_password = lambda name, content, commit=True: saved.append(
+                (name, content)
+            )
+            name = self.open_entry(window)
+
+            dialog = window._open_rotate_dialog()
+            dialog.new_row.set_text("the-rotated-one")
+            dialog.to_site_button.emit("clicked")
+            dialog.to_confirm_button.emit("clicked")
+            dialog.save_button.emit("clicked")
+            pump_until(lambda: bool(saved), timeout_seconds=5.0)
+            return name
+
+        name = run_in_application(ask)
+
+        assert len(saved) == 1
+        written_to, content = saved[0]
+        assert written_to == name
+        assert content.split("\n")[0] == "the-rotated-one"
+
+    def test_nothing_is_written_before_the_last_page(self, demo_backend_configured):
+        """The site can still refuse it, and the store must still work."""
+        saved = []
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.edit_password = lambda name, content, commit=True: saved.append(
+                name
+            )
+            self.open_entry(window)
+
+            dialog = window._open_rotate_dialog()
+            dialog.to_site_button.emit("clicked")
+            dialog.to_confirm_button.emit("clicked")
+            pump_until(lambda: False, timeout_seconds=0.3)
+
+        run_in_application(ask)
+
+        assert saved == []
+
+    def test_everything_below_the_password_survives_the_rotation(
+        self, demo_backend_configured
+    ):
+        saved = []
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+            backend.edit_password = lambda name, content, commit=True: saved.append(
+                content
+            )
+            name = next(
+                entry.name
+                for entry in backend.list_passwords()
+                if "\n" in (backend.get_password(entry.name).content or "")
+            )
+            window._on_password_selected(DEMO_BACKEND_ID, name)
+            pump_until(
+                lambda: window.password_detail.stack.get_visible_child_name()
+                == "content"
+            )
+            original = backend.get_password(name).content
+
+            dialog = window._open_rotate_dialog()
+            dialog.to_site_button.emit("clicked")
+            dialog.to_confirm_button.emit("clicked")
+            dialog.save_button.emit("clicked")
+            pump_until(lambda: bool(saved), timeout_seconds=5.0)
+            return original
+
+        original = run_in_application(ask)
+
+        below = original.partition("\n")[2]
+        assert below
+        assert saved[0].endswith(below)
+
+    def test_a_copy_made_in_the_wizard_goes_through_the_window(
+        self, demo_backend_configured
+    ):
+        """One clipboard, cleared on one timer, taken back at quit.
+
+        A second owner in the wizard would leave a secret behind that nothing
+        takes away again.
+        """
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            copied: list[tuple[str, str]] = []
+            window._on_copy_requested = lambda _source, field, value: copied.append(
+                (field, value)
+            )
+
+            dialog = window._open_rotate_dialog()
+            dialog.copy_new_button.emit("clicked")
+            return copied, dialog.new_row.get_text()
+
+        copied, generated = run_in_application(ask)
+
+        assert copied == [("Password", generated)]
+
+    def test_an_entry_that_never_decrypted_offers_no_wizard(
+        self, demo_backend_configured
+    ):
+        """The pane can hold an entry whose content did not arrive."""
+
+        def ask(app):
+            window = self.rotatable_window(app)
+            self.open_entry(window)
+            window.password_detail.entry.content = None
+            toasts = captured_messages(window)
+
+            return window._open_rotate_dialog(), toasts
+
+        dialog, toasts = run_in_application(ask)
+
+        assert dialog is None
+        assert toasts
+
+
+class TestAFailureCanBeRead:
+    """A toast is one line, and it ellipsizes.
+
+    Reported from the Flatpak: adding a password failed and the message was
+    cropped, so there was nothing to act on and nothing to report. What gpg had
+    actually said was two lines, and the second was the one that said why.
+
+    So the summary stays in the toast, the whole of it goes behind a Details
+    button, and the toast stops timing out -- an error nobody has read yet is
+    not one to take off the screen after five seconds.
+    """
+
+    def failing_window(self, app, error):
+        window = listed_window(app)
+        backend = window.backend_manager.get_backend(DEMO_BACKEND_ID)
+        backend.writable = True
+        window._refresh_write_actions()
+
+        def refuse(name, content, commit=True):
+            raise error
+
+        backend.add_password = refuse
+        return window
+
+    def toasts_from(self, window):
+        seen: list = []
+        window.toast_overlay.add_toast = seen.append
+        return seen
+
+    #: Two lines, as gpg answers an encryption it will not perform. The second
+    #: is the one worth reading, and the one a single-line toast loses.
+    GPG_REFUSAL = (
+        "gpg: 0437DE4ADC53950B: There is no assurance this key belongs to "
+        "the named user\n"
+        "gpg: [stdin]: encryption failed: Unusable public key"
+    )
+
+    def add_and_fail(self, app):
+        from gtkpass.backends import BackendError
+
+        window = self.failing_window(app, BackendError(self.GPG_REFUSAL))
+        seen = self.toasts_from(window)
+        window._add_entry(DEMO_BACKEND_ID, "email/new", "s3cret\n")
+        pump_until(lambda: bool(seen), timeout_seconds=5.0)
+        return window, seen
+
+    def test_the_summary_still_names_what_failed(self, demo_backend_configured):
+        def ask(app):
+            _, seen = self.add_and_fail(app)
+            return seen[0].get_title()
+
+        assert "email/new" in run_in_application(ask)
+
+    def test_the_toast_offers_the_rest_of_it(self, demo_backend_configured):
+        def ask(app):
+            _, seen = self.add_and_fail(app)
+            return seen[0].get_button_label()
+
+        assert run_in_application(ask) == "Details"
+
+    def test_an_unread_error_is_not_taken_off_the_screen(self, demo_backend_configured):
+        """Zero is AdwToast for "stay until it is dismissed"."""
+
+        def ask(app):
+            _, seen = self.add_and_fail(app)
+            return seen[0].get_timeout()
+
+        assert run_in_application(ask) == 0
+
+    def test_the_details_button_shows_the_whole_error(self, demo_backend_configured):
+        def ask(app):
+            window, seen = self.add_and_fail(app)
+            seen[0].emit("button-clicked")
+            return window._error_detail_label.get_label()
+
+        shown = run_in_application(ask)
+
+        assert shown == self.GPG_REFUSAL
+        assert "Unusable public key" in shown, "the line that says why is missing"
+
+    def test_the_error_can_be_selected_to_be_pasted_into_a_report(
+        self, demo_backend_configured
+    ):
+        def ask(app):
+            window, seen = self.add_and_fail(app)
+            seen[0].emit("button-clicked")
+            return window._error_detail_label.get_selectable()
+
+        assert run_in_application(ask) is True
+
+    def test_a_success_is_still_an_ordinary_toast(self, demo_backend_configured):
+        """Only failures grow a button; a confirmation has nothing behind it."""
+
+        def ask(app):
+            window = listed_window(app)
+            seen = self.toasts_from(window)
+            window._toast("Added email/new")
+            return seen[0].get_button_label(), seen[0].get_timeout()
+
+        label, timeout = run_in_application(ask)
+
+        assert label is None
+        assert timeout != 0
 
 
 class TestACopiedSecretIsTakenBack:
@@ -1946,8 +2674,7 @@ class TestSyncing:
             window = self.window_with_sync(
                 app, self.ready(), sync=lambda: SyncResult(pulled=2, pushed=1)
             )
-            toasts: list[str] = []
-            window._toast = toasts.append  # type: ignore[method-assign,assignment]
+            toasts = captured_messages(window)
 
             window.lookup_action("sync").activate(None)
             pump_until(lambda: bool(toasts), timeout_seconds=5.0)
@@ -1965,8 +2692,7 @@ class TestSyncing:
             window = self.window_with_sync(
                 app, self.ready(), sync=lambda: SyncResult(pulled=0, pushed=0)
             )
-            toasts: list[str] = []
-            window._toast = toasts.append  # type: ignore[method-assign,assignment]
+            toasts = captured_messages(window)
 
             window.lookup_action("sync").activate(None)
             pump_until(lambda: bool(toasts), timeout_seconds=5.0)
@@ -1984,8 +2710,7 @@ class TestSyncing:
 
         def check(app):
             window = self.window_with_sync(app, self.ready(), sync=failing)
-            toasts: list[str] = []
-            window._toast = toasts.append  # type: ignore[method-assign,assignment]
+            toasts = captured_messages(window)
 
             window.lookup_action("sync").activate(None)
             pump_until(lambda: bool(toasts), timeout_seconds=5.0)

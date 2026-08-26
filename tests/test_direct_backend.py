@@ -197,6 +197,58 @@ class TestMutation:
         with pytest.raises(FileExistsError):
             backend.move_password("one", "two")
 
+    def test_a_whole_folder_moves(self, backend):
+        backend.add_password("work/mail", "a\n")
+        backend.add_password("work/eu/tax", "b\n")
+        backend.add_password("personal/bank", "c\n")
+
+        backend.move_folder("work", "archive/2019")
+
+        assert sorted(e.name for e in backend.list_passwords()) == [
+            "archive/2019/eu/tax",
+            "archive/2019/mail",
+            "personal/bank",
+        ]
+
+    def test_the_entries_still_decrypt_after_the_folder_moves(self, backend):
+        backend.add_password("work/mail", "a\n")
+
+        backend.move_folder("work", "archive")
+
+        assert backend.get_password("archive/mail").password == "a"
+
+    def test_the_folder_it_left_is_pruned(self, backend, store):
+        backend.add_password("work/eu/tax", "a\n")
+
+        backend.move_folder("work", "archive")
+
+        assert not (store / "work").exists()
+
+    def test_a_sibling_whose_name_starts_the_same_stays_put(self, backend):
+        backend.add_password("work/mail", "a\n")
+        backend.add_password("workshop/lathe", "b\n")
+
+        backend.move_folder("work", "archive")
+
+        assert sorted(e.name for e in backend.list_passwords()) == [
+            "archive/mail",
+            "workshop/lathe",
+        ]
+
+    def test_a_clash_refuses_the_whole_move(self, backend):
+        backend.add_password("work/mail", "a\n")
+        backend.add_password("work/vpn", "b\n")
+        backend.add_password("archive/vpn", "c\n")
+
+        with pytest.raises(FileExistsError):
+            backend.move_folder("work", "archive")
+
+        assert sorted(e.name for e in backend.list_passwords()) == [
+            "archive/vpn",
+            "work/mail",
+            "work/vpn",
+        ]
+
     def test_copy_duplicates(self, backend):
         backend.add_password("original", "a\n")
 
@@ -331,6 +383,43 @@ class TestCommittingToAGitStore:
 
         assert git("status", "--porcelain", cwd=git_store) == ""
         assert "email/work.gpg" not in git("ls-files", cwd=git_store)
+
+    def test_a_folder_move_is_one_commit(self, backend, git_store):
+        """Not one per entry.
+
+        The inherited default moves the entries one at a time, and each of
+        those commits. A folder of twenty entries would be twenty revisions of
+        one operation, which makes the history of the store harder to read for
+        exactly the change somebody would want to find in it.
+        """
+        backend.add_password("work/mail", "a\n")
+        backend.add_password("work/vpn", "b\n")
+        backend.add_password("work/eu/tax", "c\n")
+        before = self.revisions(git_store)
+
+        backend.move_folder("work", "archive")
+
+        assert self.revisions(git_store) == before + 1
+
+    def test_the_commit_message_names_both_ends_of_the_move(self, backend, git_store):
+        from conftest import git
+
+        backend.add_password("work/mail", "a\n")
+
+        backend.move_folder("work", "archive")
+
+        message = git("log", "-1", "--pretty=%s", cwd=git_store)
+        assert "work" in message
+        assert "archive" in message
+
+    def test_a_folder_move_leaves_the_worktree_clean(self, backend, git_store):
+        from conftest import git
+
+        backend.add_password("work/eu/tax", "a\n")
+
+        backend.move_folder("work", "archive")
+
+        assert git("status", "--porcelain", "-uall", cwd=git_store) == ""
 
     def test_not_committing_can_be_asked_for(self, backend, git_store):
         from conftest import git

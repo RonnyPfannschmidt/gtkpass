@@ -137,6 +137,9 @@ class OverlapRecordingBackend(DemoBackend):
     def edit_password(self, name: str, content: str, commit: bool = True) -> None:
         self._occupy()
 
+    def move_password(self, old_name: str, new_name: str, commit: bool = True) -> None:
+        self._occupy()
+
 
 class RendezvousBackend(DemoBackend):
     """Listing waits for a second caller to arrive somewhere else.
@@ -215,3 +218,88 @@ class TestOneBackendIsUsedOneCallAtATime:
                 future.result(PATIENCE_SECONDS * 2)
         finally:
             manager.shutdown()
+
+
+class RecordingBackend(DemoBackend):
+    """A backend that notes what it was asked to do, without doing it."""
+
+    def __init__(self) -> None:
+        super().__init__(demo_data=[])
+        self.moved: list[tuple[str, str]] = []
+
+    def move_password(self, old_name: str, new_name: str, commit: bool = True) -> None:
+        self.moved.append((old_name, new_name))
+
+    def move_folder(
+        self, old_prefix: str, new_prefix: str, commit: bool = True
+    ) -> None:
+        self.moved.append((old_prefix, new_prefix))
+
+
+class TestMovingGoesThroughThePoolLikeEveryOtherWrite:
+    """`pass mv` re-encrypts across a .gpg-id boundary and then commits.
+
+    That is a GPG run and a git run, so it cannot happen on the UI thread any
+    more than a save can -- and it has to take the backend's lock, or it can
+    rewrite the tree underneath a listing.
+    """
+
+    def test_the_backend_is_asked_to_move_the_entry(self):
+        manager = BackendManager()
+        backend = RecordingBackend()
+        manager.add_backend("one", backend)
+
+        manager.move_password_async("one", "email/work", "archive/email").result(
+            PATIENCE_SECONDS
+        )
+        manager.shutdown()
+
+        assert backend.moved == [("email/work", "archive/email")]
+
+    def test_an_unknown_backend_is_refused_before_anything_is_submitted(self):
+        manager = BackendManager()
+
+        with pytest.raises(ValueError):
+            manager.move_password_async("absent", "a", "b")
+
+        manager.shutdown()
+
+    def test_a_move_does_not_overlap_a_listing(self):
+        manager = BackendManager()
+        backend = OverlapRecordingBackend()
+        manager.add_backend("one", backend)
+
+        futures = [
+            manager.list_passwords_async("one"),
+            manager.move_password_async("one", "entry", "moved"),
+            manager.list_passwords_async("one"),
+        ]
+        for future in futures:
+            future.result(PATIENCE_SECONDS)
+        manager.shutdown()
+
+        assert not backend.overlapped
+
+
+class TestMovingAFolderGoesThroughThePoolToo:
+    """A folder move is every entry re-encrypted and a commit; not UI work."""
+
+    def test_the_backend_is_asked_to_move_the_folder(self):
+        manager = BackendManager()
+        backend = RecordingBackend()
+        manager.add_backend("one", backend)
+
+        manager.move_folder_async("one", "work", "archive/work").result(
+            PATIENCE_SECONDS
+        )
+        manager.shutdown()
+
+        assert backend.moved == [("work", "archive/work")]
+
+    def test_an_unknown_backend_is_refused_before_anything_is_submitted(self):
+        manager = BackendManager()
+
+        with pytest.raises(ValueError):
+            manager.move_folder_async("absent", "a", "b")
+
+        manager.shutdown()

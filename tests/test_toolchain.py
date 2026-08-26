@@ -313,3 +313,101 @@ class TestCIRunsTheseTargets:
             assert "make" in installed_packages(job), (
                 f"the {name} job runs make and does not install it"
             )
+
+
+class TestRunningAPackageBuildsItFirst:
+    """`make flatpak-run` used to run whatever was installed last.
+
+    Which is a quiet wrong answer rather than a failure: you change something,
+    build nothing, run the Flatpak, and are looking at the previous build while
+    believing you are looking at your change. The command that fails to
+    reproduce a bug then also fails to reproduce a fix, and there is nothing on
+    screen to say which build is on screen.
+
+    A stamp rather than an unconditional rebuild, so this costs nothing when
+    nothing changed -- the RPM and the .deb already work this way and the
+    Flatpak was the one that did not.
+    """
+
+    def dry_run(self, *args: str) -> str:
+        """What make *would* do, without doing any of it."""
+        result = subprocess.run(
+            ["make", "--dry-run", *args],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    @pytest.fixture
+    def everything_out_of_date(self) -> str:
+        """--always-make, so the answer does not depend on this machine.
+
+        Whether a stamp happens to exist in this checkout is not what is under
+        test; that the target has one at all is.
+        """
+        return "--always-make"
+
+    def test_running_the_flatpak_builds_it(self, everything_out_of_date):
+        planned = self.dry_run(everything_out_of_date, "flatpak-run")
+
+        assert "flatpak-builder" in planned, (
+            f"make flatpak-run runs the previously installed build: {planned.strip()}"
+        )
+
+    def test_running_the_flatpak_still_runs_it(self, everything_out_of_date):
+        planned = self.dry_run(everything_out_of_date, "flatpak-run")
+
+        assert "flatpak run" in planned
+
+    def test_the_flatpak_build_recompiles_the_blueprints(self, everything_out_of_date):
+        """The .ui files are what the manifest copies in.
+
+        A .blp edited without `make ui` is an application whose interface is the
+        previous one -- built, installed, and indistinguishable from the current
+        one until something is clicked.
+        """
+        planned = self.dry_run(everything_out_of_date, "flatpak-run")
+
+        assert "blueprint-compiler" in planned
+
+    def test_a_failed_build_does_not_leave_its_build_dir_behind(
+        self, everything_out_of_date
+    ):
+        """flatpak-builder removes build directories on success only.
+
+        A build interrupted or failed leaves its module tree in
+        .flatpak-builder/build, and nothing ever comes back for it -- two of
+        them had accumulated to half a gigabyte before anyone looked, one of
+        them months old. --delete-build-dirs removes them either way.
+
+        The module cache is a different directory and is not affected; that one
+        is what keeps a rebuild at twelve seconds instead of compiling git.
+        """
+        planned = self.dry_run(everything_out_of_date, "flatpak")
+
+        assert "--delete-build-dirs" in planned
+
+    def test_nothing_is_rebuilt_when_nothing_changed(self):
+        """The stamp is the point: this has to stay cheap enough to always run.
+
+        A target that rebuilt unconditionally would be correct and unused --
+        `flatpak run` on its own is shorter to type, and that is the habit this
+        is meant to replace.
+        """
+        stamp = ROOT / "dist" / "flatpak" / ".installed"
+        existed = stamp.exists()
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+        try:
+            planned = self.dry_run("flatpak-run")
+        finally:
+            if not existed:
+                stamp.unlink()
+
+        assert "flatpak-builder" not in planned, (
+            f"an up-to-date Flatpak was rebuilt anyway: {planned.strip()}"
+        )
+        assert "flatpak run" in planned

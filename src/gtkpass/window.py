@@ -34,9 +34,12 @@ from gtkpass.ui.password_detail import (  # noqa: F401
     URL_KEYS,
     USERNAME_KEYS,
     PasswordDetailView,
+    field_of,
 )
 from gtkpass.ui.password_edit import PasswordEditDialog
 from gtkpass.ui.password_list import PasswordTreeView  # noqa: F401
+from gtkpass.ui.password_rename import PasswordRenameDialog
+from gtkpass.ui.password_rotate import PasswordRotateDialog
 from gtkpass.utils.async_ui import on_ui_thread
 from gtkpass.utils.clipboard import ClipboardCopier
 
@@ -141,6 +144,9 @@ class GTKPassWindow(Adw.ApplicationWindow):
         self._detail_request = 0
         # (backend id, name) of the entry on display, or None.
         self._shown: tuple[str, str] | None = None
+        #: The label of the most recently opened error dialog, so that a test
+        #: can read back what was rendered rather than only that one was built.
+        self._error_detail_label: Gtk.Label | None = None
         self._clipboard = ClipboardCopier(self)
         # The entry a copied secret came from, so moving off it can take the
         # copy back rather than leaving it there for the timeout to reach.
@@ -226,6 +232,22 @@ class GTKPassWindow(Adw.ApplicationWindow):
         delete_action.connect("activate", self._on_delete_password)
         delete_action.set_enabled(False)
         self.add_action(delete_action)
+
+        # Renaming, which is also moving: an entry's name is its path. Open for
+        # exactly as long as deleting is, and for the same two reasons -- there
+        # has to be an entry, and its store has to take the write.
+        rename_action = Gio.SimpleAction.new("rename-password", None)
+        rename_action.connect("activate", self._on_rename_password)
+        rename_action.set_enabled(False)
+        self.add_action(rename_action)
+
+        # Rotating: making a new password, taking it to the site, and only then
+        # writing. Open on the same two conditions as editing, because that is
+        # what it ends in.
+        rotate_action = Gio.SimpleAction.new("rotate-password", None)
+        rotate_action.connect("activate", self._on_rotate_password)
+        rotate_action.set_enabled(False)
+        self.add_action(rotate_action)
 
         # Nothing is syncable until the backends have loaded and reported what
         # their stores are, so this starts closed and _refresh_sync_action
@@ -318,7 +340,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
         backend_id, password_name = selected
 
         def copy(entry):
-            value = _field_of(entry, field)
+            value = field_of(entry, field)
             entry.clear_password()
             if not value:
                 self._toast(f"{password_name} has no {field.lower()}")
@@ -330,7 +352,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not read an entry from {backend_id}: {error}")
-            self._toast(f"Could not copy from {password_name}: {error}")
+            self._report_failure(f"Could not copy from {password_name}", error)
 
         try:
             future = self.backend_manager.get_password_async(backend_id, password_name)
@@ -571,6 +593,12 @@ class GTKPassWindow(Adw.ApplicationWindow):
         """Set up the password list."""
         # Connect selection handler
         self.password_list.connect_password_selected(self._on_password_selected)
+        # Every selection, not only the ones that are entries: standing on a
+        # folder changes which actions have a target, and nothing else would
+        # say so.
+        self.password_list.connect(
+            "selection-changed", lambda *_: self._refresh_write_actions()
+        )
         self.password_detail.connect("copy-requested", self._on_copy_requested)
 
         # Not a Gio.Settings.bind: Adw.PasswordEntryRow has no property to bind
@@ -592,11 +620,35 @@ class GTKPassWindow(Adw.ApplicationWindow):
         if action is not None:
             action.set_enabled(bool(writable))
 
-        # Deleting needs an entry as well as a store that will take the change.
-        delete_action = self.lookup_action("delete-password")
-        if delete_action is not None:
-            delete_action.set_enabled(
-                self._shown is not None and self._shown[0] in writable
+        # A selected folder is what the entry actions are measured against
+        # rather than the pane. Right-clicking a folder selects it and opens
+        # the menu over it, and the pane goes on showing whatever it was
+        # showing -- so a menu that renamed the folder while its Delete removed
+        # an entry that is not even on screen would be a trap.
+        folder = self.password_list.get_selected_folder()
+
+        # Deleting, renaming and rotating all need an entry as well as a store
+        # that will take the change.
+        writable_entry = (
+            folder is None and self._shown is not None and self._shown[0] in writable
+        )
+        for name in ("delete-password", "rotate-password"):
+            action = self.lookup_action(name)
+            if action is not None:
+                action.set_enabled(writable_entry)
+
+        # Editing needs no writable check of its own -- _set_shown owns it --
+        # but it acts on the pane, so a folder takes it away too.
+        edit_action = self.lookup_action("edit-password")
+        if edit_action is not None and folder is not None:
+            edit_action.set_enabled(False)
+
+        # Renaming is the one that also applies to a folder, which is a row the
+        # sidebar has and the pane never shows.
+        rename_action = self.lookup_action("rename-password")
+        if rename_action is not None:
+            rename_action.set_enabled(
+                folder[0] in writable if folder is not None else writable_entry
             )
 
         if writable:
@@ -826,7 +878,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
             )
         except Exception as e:
             logger.error(f"Could not adopt the store at {store}: {e}")
-            self._toast(f"Could not use {store}: {e}")
+            self._report_failure(f"Could not use {store}", e)
             return
 
         self.adopt_store_button.set_visible(False)
@@ -994,7 +1046,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
             )
         except Exception as e:
             logger.error(f"Could not record the recipients for {backend_id}: {e}")
-            self._toast(f"Could not record the recipients: {e}")
+            self._report_failure("Could not record the recipients", e)
             return
 
         self._toast(
@@ -1082,7 +1134,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
             if isinstance(error, SyncNotPermitted):
                 self._show_sync_blocked(error)
             else:
-                self._toast(f"Could not sync: {error}")
+                self._report_failure("Could not sync", error)
             self._sync_next()
 
         try:
@@ -1169,7 +1221,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not add an entry to {backend_id}: {error}")
-            self._toast(f"Could not add {name}: {error}")
+            self._report_failure(f"Could not add {name}", error)
 
         try:
             future = self.backend_manager.add_password_async(backend_id, name, content)
@@ -1298,6 +1350,166 @@ class GTKPassWindow(Adw.ApplicationWindow):
         dialog.present(self)
         return dialog
 
+    def _on_rotate_password(self, action, param):
+        """Handle the rotate action."""
+        self._open_rotate_dialog()
+
+    def _open_rotate_dialog(self) -> PasswordRotateDialog | None:
+        """Walk a password change through, writing the store last.
+
+        Returns the dialog, as the other three do, so a test can drive it to a
+        response rather than only prove it was built.
+
+        Returns:
+            The dialog, or None when there is nothing rotatable on display.
+        """
+        entry = self.password_detail.entry
+        if self._shown is None or entry is None:
+            return None
+
+        backend_id, password_name = self._shown
+        dialog = PasswordRotateDialog()
+        if not dialog.load(
+            entry, store_name=self._get_backend_display_name(backend_id)
+        ):
+            # The decrypt has not come back, so there is no entry to keep the
+            # rest of. Writing now would replace it with a password and nothing
+            # else.
+            self._toast(f"{password_name} has not been opened yet")
+            return None
+
+        # Through the window's clipboard rather than the wizard's own: one
+        # owner, cleared on one timer and taken back at quit.
+        dialog.connect("copy-requested", self._on_copy_requested)
+        dialog.connect(
+            "rotated",
+            lambda _dialog, content: self._save_entry(
+                backend_id, password_name, content
+            ),
+        )
+        dialog.present(self)
+        return dialog
+
+    def _on_rename_password(self, action, param):
+        """Handle the rename action."""
+        self._open_rename_dialog()
+
+    def _open_rename_dialog(self) -> PasswordRenameDialog | None:
+        """Ask where the entry or the folder is to move to.
+
+        A selected folder wins over an entry on display. Right-clicking a row
+        selects it before the menu opens, so the sidebar is the more recent
+        statement of what somebody meant -- and the pane goes on showing
+        whatever it was showing while the tree is being walked.
+
+        Returns the dialog, as the other three do, so a test can drive it to a
+        response rather than only prove it was built.
+
+        Returns:
+            The dialog, or None when there is nothing selected to move.
+        """
+        folder = self.password_list.get_selected_folder()
+        if folder is not None:
+            return self._rename_folder_dialog(*folder)
+        if self._shown is None:
+            return None
+        return self._rename_entry_dialog(*self._shown)
+
+    def _rename_entry_dialog(
+        self, backend_id: str, password_name: str
+    ) -> PasswordRenameDialog:
+        dialog = PasswordRenameDialog()
+        dialog.offer(
+            current_name=password_name,
+            # What the sidebar holds rather than a fresh listing: a clash is
+            # reported as the name is typed, and going to the store for every
+            # keystroke would be a decrypt-free but still blocking round trip.
+            taken=self.password_list.entry_names().get(backend_id, set()),
+            store_name=self._get_backend_display_name(backend_id),
+        )
+        dialog.connect(
+            "renamed",
+            lambda _dialog, new_name: self._move_entry(
+                backend_id, password_name, new_name
+            ),
+        )
+        dialog.present(self)
+        return dialog
+
+    def _rename_folder_dialog(
+        self, backend_id: str, folder: str
+    ) -> PasswordRenameDialog:
+        dialog = PasswordRenameDialog()
+        dialog.offer_folder(
+            current_name=folder,
+            taken=_folders_in(self.password_list.entry_names().get(backend_id, set())),
+            store_name=self._get_backend_display_name(backend_id),
+        )
+        dialog.connect(
+            "renamed",
+            lambda _dialog, new_path: self._move_folder(backend_id, folder, new_path),
+        )
+        dialog.present(self)
+        return dialog
+
+    def _move_folder(self, backend_id: str, old_path: str, new_path: str) -> None:
+        """Move a folder, off the UI thread as every other write is.
+
+        The longest write GTKPass makes: every entry under it, each of which
+        may need re-encrypting because the destination subtree has a .gpg-id of
+        its own, and then a commit.
+        """
+
+        def moved(_result):
+            self._toast(f"Moved {old_path} to {new_path}")
+            # Whatever the pane was showing may have been under the folder, and
+            # would now be at a path this window has not worked out. Following
+            # it would mean doing the move a second time to find out where it
+            # went, so let go and let the listing say what is there.
+            self.password_detail.clear()
+            self._set_shown(None)
+            self._showing_entry = False
+            self._show_placeholder("ready")
+            self._load_passwords()
+
+        def report(error):
+            logger.error(f"Could not move a folder in {backend_id}: {error}")
+            self._report_failure(f"Could not move {old_path}", error)
+
+        try:
+            future = self.backend_manager.move_folder_async(
+                backend_id, old_path, new_path
+            )
+        except ValueError as e:
+            report(e)
+            return
+        on_ui_thread(future, moved, report)
+
+    def _move_entry(self, backend_id: str, old_name: str, new_name: str) -> None:
+        """Move an entry, off the UI thread as every other write is."""
+
+        def moved(_result):
+            self._toast(f"Renamed {old_name} to {new_name}")
+            # Re-list rather than relabelling the row: a move empties the
+            # folder it left and makes the one it went to, and the store is
+            # what decides both.
+            self._load_passwords()
+            # The entry is still the one on display, under the name it now has.
+            self._on_password_selected(backend_id, new_name)
+
+        def report(error):
+            logger.error(f"Could not move an entry in {backend_id}: {error}")
+            self._report_failure(f"Could not rename {old_name}", error)
+
+        try:
+            future = self.backend_manager.move_password_async(
+                backend_id, old_name, new_name
+            )
+        except ValueError as e:
+            report(e)
+            return
+        on_ui_thread(future, moved, report)
+
     def _on_delete_password(self, action, param):
         """Handle the delete action."""
         self._confirm_delete()
@@ -1353,7 +1565,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not delete an entry from {backend_id}: {error}")
-            self._toast(f"Could not delete {password_name}: {error}")
+            self._report_failure(f"Could not delete {password_name}", error)
 
         try:
             future = self.backend_manager.delete_password_async(
@@ -1379,7 +1591,7 @@ class GTKPassWindow(Adw.ApplicationWindow):
 
         def report(error):
             logger.error(f"Could not save an entry to {backend_id}: {error}")
-            self._toast(f"Could not save {password_name}: {error}")
+            self._report_failure(f"Could not save {password_name}", error)
 
         try:
             future = self.backend_manager.edit_password_async(
@@ -1415,6 +1627,59 @@ class GTKPassWindow(Adw.ApplicationWindow):
     def _toast(self, message: str) -> None:
         self.toast_overlay.add_toast(Adw.Toast.new(message))
 
+    def _report_failure(self, summary: str, error: object) -> None:
+        """Say what failed, and keep the whole of why within reach.
+
+        A toast is one line and it ellipsizes. gpg answers an encryption it
+        will not perform with two, and the second is the one that says why --
+        so a failure reported as a toast alone arrived as the beginning of a
+        sentence, which is neither actionable nor reportable.
+
+        The summary stays where it was. The rest goes behind a Details button,
+        and the toast stops timing out: an error nobody has read yet is not one
+        to take off the screen after five seconds.
+        """
+        detail = str(error).strip()
+        toast = Adw.Toast.new(summary)
+        # 0 is AdwToast for "until it is dismissed".
+        toast.set_timeout(0)
+        if detail and detail not in summary:
+            toast.set_button_label("Details")
+            toast.connect(
+                "button-clicked", lambda *_: self._show_error_detail(summary, detail)
+            )
+        self.toast_overlay.add_toast(toast)
+
+    def _show_error_detail(self, summary: str, detail: str) -> Adw.AlertDialog:
+        """The whole error, selectable, so it can be pasted into a report."""
+        builder = Gtk.Builder.new_from_file(
+            str(importlib.resources.files("gtkpass.ui.blueprints") / "error_detail.ui")
+        )
+        dialog = builder.get_object("error_detail_dialog")
+        dialog.set_body(summary)
+        # Held on the window rather than looked up again: the dialog is built
+        # per failure, and a test has to be able to read back what it rendered.
+        self._error_detail_label = builder.get_object("error_detail_label")
+        self._error_detail_label.set_label(detail)
+        dialog.present(self)
+        return dialog
+
+
+def _folders_in(entry_names: set[str]) -> set[str]:
+    """Every folder path implied by a set of entry names.
+
+    A store has no folders of its own -- a folder exists because an entry's
+    name has a slash in it -- so the sidebar's entry list is where they come
+    from, and it is already in hand. What this is for is reporting a clash
+    while the new path is still being typed.
+    """
+    folders = set()
+    for name in entry_names:
+        parts = name.split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            folders.add("/".join(parts[:depth]))
+    return folders
+
 
 def _tilde(path: Path) -> str:
     """A path as its owner writes it, so a button can carry it."""
@@ -1422,22 +1687,6 @@ def _tilde(path: Path) -> str:
         return f"~/{path.relative_to(Path.home())}"
     except ValueError:
         return str(path)
-
-
-def _field_of(entry, field: str) -> str:
-    """One of the copyable fields, read straight off a decrypted entry.
-
-    The same keys the detail pane picks its rows out with, so a copy made
-    without opening an entry lands on the same value as one made from the pane.
-    """
-    if field == "Password":
-        return entry.password or ""
-    keys = {"Username": USERNAME_KEYS, "URL": URL_KEYS}[field]
-    metadata = entry.metadata
-    for key in keys:
-        if metadata.get(key):
-            return metadata[key]
-    return ""
 
 
 def _recipient_lines(audit) -> str:

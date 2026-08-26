@@ -143,5 +143,41 @@ modules:
         ${FLATPAK_DEST}/share/glib-2.0/schemas/${FLATPAK_ID}.gschema.xml
       - glib-compile-schemas ${FLATPAK_DEST}/share/glib-2.0/schemas
     sources:
+      # The checkout, so what is built is the working tree rather than a tag.
+      #
+      # Everything in it is copied into the build context, on every build:
+      # flatpak-builder never caches a `type: dir` source, so this module is
+      # rebuilt whether anything changed or not. The skip list is therefore
+      # about what is copied, not about cache invalidation -- there is no cache
+      # here to invalidate.
+      #
+      # .dev is the entry that is not merely wasteful. It is a password store
+      # with a GPG home beside it -- throwaway, invented entries, but AGENTS.md
+      # is clear that a store goes where it is used, and a build sandbox is not
+      # where it is used.
+      #
+      # The rest is build output, and most of it is this application's own:
+      # .flatpak-repo and .flatpak-build together are three quarters of a
+      # gigabyte of previous Flatpak builds being copied into the next one.
+      # Measured: without this list the context is about 1.4G, with it 6.7M.
+      #
+      # Nothing here is needed to build. The module reads src, data,
+      # pyproject.toml and LICENSE, and it does not read the git history --
+      # SETUPTOOLS_SCM_PRETEND_VERSION above is set precisely because there is
+      # no repository in the sandbox to read a version out of.
       - type: dir
         path: ..
+        skip:
+          - .dev
+          - .venv
+          - build
+          - dist
+          - htmlcov
+          - .coverage
+          - .git
+          - .flatpak-build
+          - .flatpak-builder
+          - .flatpak-repo
+          - .pytest_cache
+          - .mypy_cache
+          - .ruff_cache
